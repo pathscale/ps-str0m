@@ -92,21 +92,39 @@ provenance come from the published crate manifests for
 resolved graph separately; this README does not treat crate names or feature
 labels as proof of implementation purity.
 
+## Acceptance status
+
+The executable `examples/provider-probe.rs` was run against the current source
+tree and passed these provider-level checks:
+
+- parse the returned certificate as DER X.509;
+- match the returned PKCS#8 private key to the certificate's P-256 SPKI;
+- verify the certificate self-signature over its TBS certificate;
+- match the provider SHA-256 result to SHA-256 over the certificate DER; and
+- encrypt/decrypt an AES-128-GCM SRTP payload and reject a modified tag.
+
+The packaged leaf verification against published `str0m-proto 0.7.0`, clippy,
+and formatting also passed. A source-only cleanup removed five unused trait
+imports from the probe after that run; rerunning the probe after the cleanup is
+still a release check. The root harness separately recorded nine direct DTLS
+handshake cases and two SRTP replay-rejection cases.
+
+These checks do not establish DTLS retransmission/close behavior for the leaf,
+a negotiated two-peer SRTP loopback with counters, or a Chuzz media endpoint.
+
 ## Required acceptance
 
-Publishing or using this provider as the Chuzz default requires all of the
-following evidence against the exact release source:
+Publishing or using this provider as the Chuzz default still requires all of
+the following evidence against the exact release source:
 
 1. Normal and build dependency graphs for the selected feature set contain no
    `aws-lc-rs`, `aws-lc-sys`, `ring`, OpenSSL, C/C++ build, or unapproved
    native edge. Optional native backends in the root workspace remain explicit
    exclusions rather than an all-features purity claim.
-2. Provider construction produces a parseable DER certificate and matching
-   P-256 public/private key. The DTLS peer verifies the certificate fingerprint
-   and completes a real handshake, including retransmission and close paths.
-3. A two-peer SRTP loopback encrypts and decrypts real packets with the
-   negotiated profile, increments send/receive counters, and rejects altered
-   authentication data.
+2. A real DTLS peer verifies the certificate fingerprint and completes the
+   handshake, including retransmission and close paths.
+3. A two-peer SRTP loopback encrypts and decrypts negotiated media, increments
+   send/receive counters, and rejects altered authentication data.
 4. A `ps-str0m` Rust-only configuration using
    `default-features = false, features = ["rust-crypto"]` completes the same
    DTLS/SRTP loopback without selecting an alternate provider.

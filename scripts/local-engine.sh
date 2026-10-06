@@ -87,4 +87,5 @@ if [[ "$lock_was_present" -eq 1 ]]; then
     snapshot_ready=1
 fi
 
-cargo --config "$config" "$@"
+# External cargo subcommands such as clippy must receive the config argument too.
+cargo "$1" --config "$config" "${@:2}"
