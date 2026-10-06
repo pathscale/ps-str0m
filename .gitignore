@@ -12,3 +12,6 @@ dimpl
 webrtc
 *.pcap
 .wt
+Cargo.lock
+.cargo/local-engine.toml
+.cargo/.local-engine.guard/

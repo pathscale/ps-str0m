@@ -334,12 +334,13 @@
 //!
 //! # Crypto backends
 //!
-//! str0m supports multiple crypto backends via feature flags. The default is `aws-lc-rs`.
+//! str0m supports multiple crypto backends via feature flags. This fork's default
+//! is the Rust-only `rust-crypto` profile; native backends remain explicit opt-ins.
 //!
 //! | Feature           | Crate                 | DTLS                             | Platforms |
 //! |-------------------|-----------------------|----------------------------------|-----------|
 //! | `aws-lc-rs`       | `str0m-aws-lc-rs`     | dimpl + AWS-LC-RS                | All       |
-//! | `rust-crypto`     | `str0m-rust-crypto`   | dimpl + RustCrypto               | All       |
+//! | `rust-crypto`     | `ps-str0m-rust-crypto` | dimpl + RustCrypto              | All       |
 //! | `openssl`         | `str0m-openssl`       | OpenSSL (DTLS 1.2 only)          | All       |
 //! | `openssl-dimpl`   | `str0m-openssl`       | dimpl + OpenSSL crypto           | All       |
 //! | `apple-crypto`    | `str0m-apple-crypto`  | dimpl + Apple CryptoKit          | macOS/iOS |

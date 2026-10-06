@@ -1,24 +1,26 @@
 [package]
-name = "str0m-rust-crypto"
-version = "0.6.0"
+name = "ps-str0m-rust-crypto"
+version = "0.1.0"
 authors = ["Martin Algesten <martin@algesten.se>"]
-description = "Pure Rust crypto backend for str0m WebRTC"
+description = "Pure RustCrypto DTLS and SRTP provider for the str0m WebRTC stack"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/algesten/str0m"
+repository = "https://github.com/pathscale/ps-str0m"
 readme = "README.md"
+keywords = ["webrtc", "dtls", "srtp", "cryptography"]
+categories = ["cryptography", "network-programming", "multimedia"]
 edition = "2024"
 
 # MSRV
 rust-version = "1.85.0"
 
 [dependencies]
-str0m-proto = { workspace = true, features = ["dtls"] }
-dimpl = { workspace = true, features = ["rust-crypto", "rcgen"] }
-time.workspace = true
-hmac.workspace = true
-aes-gcm.workspace = true
-aes.workspace = true
-ctr.workspace = true
-p256.workspace = true
-sha1.workspace = true
-sha2.workspace = true
+str0m-proto = { version = "0.7.0", default-features = false, features = ["dtls"] }
+dimpl = { version = "0.7.4", default-features = false, features = ["rust-crypto"] }
+hmac = "0.12.1"
+aes-gcm = "0.10"
+aes = "0.8"
+ctr = "0.9"
+p256 = { version = "0.13", features = ["ecdh"] }
+sha1 = "0.10"
+sha2 = { version = "0.10", features = ["oid"] }
+x509-cert = { version = "0.2", default-features = false, features = ["builder"] }

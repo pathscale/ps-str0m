@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use super::certificate::generate_certificate;
 use str0m_proto::crypto::CryptoError;
 use str0m_proto::crypto::DtlsVersion;
 use str0m_proto::crypto::dtls::ProtocolVersion;
@@ -17,13 +18,7 @@ pub(super) struct RustCryptoDtlsProvider;
 
 impl DtlsProvider for RustCryptoDtlsProvider {
     fn generate_certificate(&self) -> Option<DtlsCert> {
-        // Use dimpl's rcgen-based certificate generation (with RustCrypto backend)
-        dimpl::certificate::generate_self_signed_certificate()
-            .ok()
-            .map(|cert| DtlsCert {
-                certificate: cert.certificate,
-                private_key: cert.private_key,
-            })
+        generate_certificate()
     }
 
     fn new_dtls(
