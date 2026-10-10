@@ -33,9 +33,12 @@ impl DtlsProvider for RustCryptoDtlsProvider {
             private_key: cert.private_key.clone(),
         };
 
-        // Create a default dimpl Config with RustCrypto crypto provider
+        // Select the provider explicitly even if another consumer enables a
+        // native dimpl feature in the same dependency graph.
         // ICE verifies return routability before DTLS, making server cookies redundant.
-        let mut builder = dimpl::Config::builder().use_server_cookie(false);
+        let mut builder = dimpl::Config::builder()
+            .with_crypto_provider(dimpl::crypto::rust_crypto::default_provider())
+            .use_server_cookie(false);
         if let Some(mtu) = mtu {
             builder = builder.mtu(mtu);
         }
@@ -119,3 +122,4 @@ impl DtlsInstance for RustCryptoDtlsInstance {
         self.dtls.close()
     }
 }
+

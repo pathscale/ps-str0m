@@ -4,8 +4,8 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use p256::ecdsa::{DerSignature, SigningKey};
-use p256::elliptic_curve::rand_core::{OsRng, RngCore};
 use p256::pkcs8::EncodePrivateKey;
+use rand_core::{OsRng, RngCore};
 use str0m_proto::crypto::dtls::DtlsCert;
 use x509_cert::builder::{Builder, CertificateBuilder, Profile};
 use x509_cert::der::Encode;
@@ -20,7 +20,9 @@ pub(super) fn generate_certificate() -> Option<DtlsCert> {
     let mut rng = OsRng;
     let signing_key = SigningKey::random(&mut rng);
     let mut serial = [0u8; 16];
-    rng.fill_bytes(&mut serial);
+    rng.try_fill_bytes(&mut serial).ok()?;
+    // RFC 5280 requires a positive, nonzero serial number.
+    serial[0] |= 1;
 
     let subject = Name::from_str("CN=DTLS Peer,O=DTLS").ok()?;
     let public_key = SubjectPublicKeyInfoOwned::from_key(*signing_key.verifying_key()).ok()?;
@@ -45,3 +47,4 @@ pub(super) fn generate_certificate() -> Option<DtlsCert> {
         private_key,
     })
 }
+
