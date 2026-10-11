@@ -19,7 +19,8 @@ struct RustCryptoAeadChacha20Poly1305Cipher {
 
 impl std::fmt::Debug for RustCryptoAeadChacha20Poly1305Cipher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RustCryptoAeadChacha20Poly1305Cipher").finish()
+        f.debug_struct("RustCryptoAeadChacha20Poly1305Cipher")
+            .finish()
     }
 }
 
@@ -44,7 +45,9 @@ impl AeadChacha20Poly1305Cipher for RustCryptoAeadChacha20Poly1305Cipher {
         let tag = self
             .cipher
             .encrypt_in_place_detached(Nonce::from_slice(iv), aad, body)
-            .map_err(|e| CryptoError::Other(format!("ChaCha20-Poly1305 encrypt failed: {:?}", e)))?;
+            .map_err(|e| {
+                CryptoError::Other(format!("ChaCha20-Poly1305 encrypt failed: {:?}", e))
+            })?;
         rest[..tag_len].copy_from_slice(&tag);
         Ok(())
     }
@@ -77,7 +80,9 @@ impl AeadChacha20Poly1305Cipher for RustCryptoAeadChacha20Poly1305Cipher {
 
         self.cipher
             .decrypt_in_place_detached(Nonce::from_slice(iv), aad, body, Tag::from_slice(tag))
-            .map_err(|e| CryptoError::Other(format!("ChaCha20-Poly1305 decrypt failed: {:?}", e)))?;
+            .map_err(|e| {
+                CryptoError::Other(format!("ChaCha20-Poly1305 decrypt failed: {:?}", e))
+            })?;
         Ok(ciphertext.len())
     }
 }
@@ -96,11 +101,7 @@ impl std::fmt::Debug for RustCryptoSupportedAeadChacha20Poly1305 {
 }
 
 impl SupportedAeadChacha20Poly1305 for RustCryptoSupportedAeadChacha20Poly1305 {
-    fn create_cipher(
-        &self,
-        key: [u8; 32],
-        _encrypt: bool,
-    ) -> Box<dyn AeadChacha20Poly1305Cipher> {
+    fn create_cipher(&self, key: [u8; 32], _encrypt: bool) -> Box<dyn AeadChacha20Poly1305Cipher> {
         Box::new(RustCryptoAeadChacha20Poly1305Cipher {
             cipher: ChaCha20Poly1305::new(&key.into()),
         })

@@ -12,7 +12,6 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::OnceLock;
 use std::time::Instant;
 
-
 use crate::crypto::dtls::*;
 use crate::crypto::error::CryptoError;
 

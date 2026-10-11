@@ -233,7 +233,7 @@ impl<'a> SdpApi<'a> {
     /// If changes have been made, nothing happens until we call [`SdpApi::apply()`].
     ///
     /// ```
-    /// # #[cfg(feature = "openssl")] {
+    /// # #[cfg(feature = "rust-crypto")] {
     /// # use std::time::Instant;
     /// # use str0m::{Rtc, media::MediaKind, media::Direction};
     /// let mut rtc = Rtc::new(Instant::now());
@@ -261,7 +261,7 @@ impl<'a> SdpApi<'a> {
     ///   CNAME in the RTP SDES.
     ///
     /// ```
-    /// # #[cfg(feature = "openssl")] {
+    /// # #[cfg(feature = "rust-crypto")] {
     /// # use std::time::Instant;
     /// # use str0m::{Rtc, media::MediaKind, media::Direction};
     /// let mut rtc = Rtc::new(Instant::now());
@@ -401,7 +401,7 @@ impl<'a> SdpApi<'a> {
     /// useful when multiple channels are in use at the same time.
     ///
     /// ```
-    /// # #[cfg(feature = "openssl")] {
+    /// # #[cfg(feature = "rust-crypto")] {
     /// # use std::time::Instant;
     /// # use str0m::Rtc;
     /// let mut rtc = Rtc::new(Instant::now());
@@ -423,7 +423,7 @@ impl<'a> SdpApi<'a> {
     /// Refer to `add_channel` for more details.
     ///
     /// ```
-    /// # #[cfg(feature = "openssl")] {
+    /// # #[cfg(feature = "rust-crypto")] {
     /// # use std::time::Instant;
     /// # use str0m::{channel::{ChannelConfig, Reliability}, Rtc};
     /// let mut rtc = Rtc::new(Instant::now());
@@ -490,7 +490,7 @@ impl<'a> SdpApi<'a> {
     /// the current [`SdpPendingOffer`].
     ///
     /// ```
-    /// # #[cfg(feature = "openssl")] {
+    /// # #[cfg(feature = "rust-crypto")] {
     /// # use std::time::Instant;
     /// # use str0m::Rtc;
     /// let mut rtc = Rtc::new(Instant::now());

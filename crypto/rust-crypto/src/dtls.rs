@@ -122,4 +122,3 @@ impl DtlsInstance for RustCryptoDtlsInstance {
         self.dtls.close()
     }
 }
-

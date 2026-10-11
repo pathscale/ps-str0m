@@ -33,7 +33,9 @@ pub fn from_feature_flags() -> CryptoProvider {
     #[cfg(feature = "rust-crypto")]
     return str0m_rust_crypto::default_provider();
 
-    panic!("No crypto provider available: enable the rust-crypto feature or install a CryptoProvider");
+    panic!(
+        "No crypto provider available: enable the rust-crypto feature or install a CryptoProvider"
+    );
 }
 
 mod finger;

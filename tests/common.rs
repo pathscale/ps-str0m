@@ -447,50 +447,12 @@ pub fn init_crypto_default() {
 }
 
 /// Create a crypto provider from a string name.
-/// Supported names: "aws-lc-rs", "rust-crypto", "openssl", "wincrypto", "apple-crypto"
+/// Supported name: "rust-crypto"
 fn get_crypto_provider_by_name(name: &str) -> CryptoProvider {
     match name {
-        #[cfg(feature = "aws-lc-rs")]
-        "aws-lc-rs" | "aws" => str0m_aws_lc_rs::default_provider(),
-
         #[cfg(feature = "rust-crypto")]
         "rust-crypto" => str0m_rust_crypto::default_provider(),
-
-        // If both openssl and openssl-dimpl are declared, only openssl-dimpl is available.
-        #[cfg(all(feature = "openssl", not(feature = "openssl-dimpl")))]
-        "openssl" => str0m_openssl::default_provider(),
-
-        #[cfg(feature = "openssl-dimpl")]
-        "openssl-dimpl" => str0m_openssl::default_provider(),
-
-        #[cfg(all(feature = "wincrypto", target_os = "windows"))]
-        "wincrypto" => str0m_wincrypto::default_provider(),
-
-        #[cfg(all(feature = "apple-crypto", target_vendor = "apple"))]
-        "apple-crypto" => str0m_apple_crypto::default_provider(),
-
-        _ => {
-            let mut available: Vec<&'static str> = Vec::new();
-            #[cfg(feature = "aws-lc-rs")]
-            available.push("aws-lc-rs");
-            #[cfg(feature = "rust-crypto")]
-            available.push("rust-crypto");
-            // If both openssl and openssl-dimpl are declared, only openssl-dimpl is available.
-            #[cfg(all(feature = "openssl", not(feature = "openssl-dimpl")))]
-            available.push("openssl");
-            #[cfg(feature = "openssl-dimpl")]
-            available.push("openssl-dimpl");
-            #[cfg(all(feature = "wincrypto", target_os = "windows"))]
-            available.push("wincrypto");
-            #[cfg(all(feature = "apple-crypto", target_vendor = "apple"))]
-            available.push("apple-crypto");
-
-            panic!(
-                "Unknown or unavailable crypto provider '{}'. Available providers: [{}]",
-                name,
-                available.join(", ")
-            )
-        }
+        _ => panic!("Unknown or unavailable crypto provider '{}'.", name),
     }
 }
 

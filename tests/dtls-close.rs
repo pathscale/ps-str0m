@@ -1,12 +1,5 @@
 //! Tests for the Rtc shutdown states.
-#![cfg(any(
-    feature = "aws-lc-rs",
-    feature = "rust-crypto",
-    feature = "openssl",
-    feature = "openssl-dimpl",
-    feature = "wincrypto",
-    feature = "apple-crypto",
-))]
+#![cfg(feature = "rust-crypto")]
 
 use std::net::Ipv4Addr;
 use std::time::Instant;

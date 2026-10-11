@@ -37,7 +37,6 @@ impl Error for CryptoError {
     }
 }
 
-
 impl From<io::Error> for CryptoError {
     fn from(err: io::Error) -> Self {
         CryptoError::Io(err)

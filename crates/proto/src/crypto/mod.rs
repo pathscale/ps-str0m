@@ -1,6 +1,6 @@
 mod provider;
-pub use provider::{DtlsVersion, Sha1HmacProvider, Sha256Provider};
 pub use provider::{AeadChacha20Poly1305, AeadChacha20Poly1305Cipher, CryptoProvider, CryptoSafe};
+pub use provider::{DtlsVersion, Sha1HmacProvider, Sha256Provider};
 pub use provider::{SrtpProvider, SupportedAeadChacha20Poly1305};
 
 mod error;

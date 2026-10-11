@@ -19,35 +19,9 @@ jobs:
     strategy:
       matrix:
         rust: [stable, beta, 1.85.0]
-        crypto:
-          - name: openssl
-            os: ubuntu-latest
-          - name: openssl
-            os: macos-latest
-          - name: openssl-dimpl
-            os: ubuntu-latest
-          - name: openssl-dimpl
-            os: macos-latest
-          - name: aws-lc-rs
-            os: ubuntu-latest
-          - name: aws-lc-rs
-            os: macos-latest
-          - name: aws-lc-rs
-            os: windows-latest
-          - name: rust-crypto
-            os: ubuntu-latest
-          - name: rust-crypto
-            os: macos-latest
-          - name: rust-crypto
-            os: windows-latest
-          - name: wincrypto
-            os: windows-latest
-          - name: wincrypto-dimpl
-            os: windows-latest
-          - name: apple-crypto
-            os: macos-latest
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
-    runs-on: ${{ matrix.crypto.os }}
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -58,8 +32,8 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
-      - name: Test with ${{ matrix.crypto.name }}
-        run: cargo +${{steps.toolchain.outputs.name}} test --no-default-features --features ${{ matrix.crypto.features || matrix.crypto.name }}
+      - name: Test with rust-crypto
+        run: cargo +${{steps.toolchain.outputs.name}} test --no-default-features --features rust-crypto
 
   snowflake:
     runs-on: ubuntu-latest
@@ -99,11 +73,8 @@ jobs:
         run: cargo +${{steps.toolchain.outputs.name}} fmt --all -- --check
       - name: clippy (default features)
         run: cargo +${{steps.toolchain.outputs.name}} clippy -- -D warnings
-      - name: clippy (all crypto backends)
-        run: |
-          cargo +${{steps.toolchain.outputs.name}} clippy --no-default-features --features openssl -- -D warnings
-          cargo +${{steps.toolchain.outputs.name}} clippy --no-default-features --features aws-lc-rs -- -D warnings
-          cargo +${{steps.toolchain.outputs.name}} clippy --no-default-features --features rust-crypto -- -D warnings
+      - name: clippy (rust-crypto)
+        run: cargo +${{steps.toolchain.outputs.name}} clippy --no-default-features --features rust-crypto -- -D warnings
       - name: doc
         run: cargo doc --no-deps
         env:
@@ -133,16 +104,8 @@ jobs:
             os: ubuntu-latest
           - name: crates/netem
             os: ubuntu-latest
-          - name: crypto/apple-crypto
-            os: macos-latest
-          - name: crypto/aws-lc-rs
-            os: ubuntu-latest
-          - name: crypto/openssl
-            os: ubuntu-latest
           - name: crypto/rust-crypto
             os: ubuntu-latest
-          - name: crypto/wincrypto
-            os: windows-latest
     runs-on: ${{ matrix.dir.os }}
     steps:
       - uses: actions/checkout@v4
@@ -171,3 +134,4 @@ jobs:
         with:
           command: check
           arguments: --all-features
+

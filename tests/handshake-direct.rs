@@ -1,4 +1,4 @@
-﻿use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -76,23 +76,9 @@ pub fn handshake_direct_api_snap() -> Result<(), RtcError> {
     run_direct_handshake(DtlsVersion::Auto, DtlsVersion::Auto, true)
 }
 
-/// Returns the name of the default crypto provider based on compile-time feature flags.
-/// Mirrors the priority order in `str0m::crypto::from_feature_flags()`.
-#[allow(unreachable_code)]
+/// Returns the name of the only supported crypto provider.
 fn default_crypto_name() -> &'static str {
-    #[cfg(feature = "aws-lc-rs")]
-    return "aws-lc-rs";
-    #[cfg(feature = "rust-crypto")]
-    return "rust-crypto";
-    #[cfg(feature = "openssl-dimpl")]
-    return "openssl-dimpl";
-    #[cfg(feature = "openssl")]
-    return "openssl";
-    #[cfg(all(feature = "wincrypto", target_os = "windows"))]
-    return "wincrypto";
-    #[cfg(all(feature = "apple-crypto", target_vendor = "apple"))]
-    return "apple-crypto";
-    "unknown"
+    "rust-crypto"
 }
 
 fn run_handshake_test(client_dtls: DtlsVersion, server_dtls: DtlsVersion) -> Result<(), RtcError> {
@@ -114,23 +100,6 @@ fn run_direct_handshake(
         std::env::var("L_CRYPTO").unwrap_or_else(|_| default_crypto_name().into());
     let server_crypto_name =
         std::env::var("R_CRYPTO").unwrap_or_else(|_| default_crypto_name().into());
-
-    // Native openssl only supports DTLS 1.2 - skip tests requiring 1.3/Auto.
-    // Also skip Auto client -> 1.2-only server: dimpl advertises X25519 in the hybrid
-    // ClientHello but its DTLS 1.2 engine can't process X25519 in ServerKeyExchange.
-    let dtls12_only = |name: &str| matches!(name, "openssl");
-    let needs_13 = |v: DtlsVersion| matches!(v, DtlsVersion::Auto | DtlsVersion::Dtls13);
-
-    if (dtls12_only(&client_crypto_name) && needs_13(client_dtls))
-        || (dtls12_only(&server_crypto_name) && needs_13(server_dtls))
-        || (matches!(client_dtls, DtlsVersion::Auto) && dtls12_only(&server_crypto_name))
-    {
-        println!(
-            "\n=== SKIPPED: client={} ({}), server={} ({}) - DTLS 1.3/Auto not supported ===",
-            client_dtls, client_crypto_name, server_dtls, server_crypto_name
-        );
-        return Ok(());
-    }
 
     println!(
         "\n=== Test: client={} ({}), server={} ({}) ===",

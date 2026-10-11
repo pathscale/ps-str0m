@@ -47,4 +47,3 @@ pub(super) fn generate_certificate() -> Option<DtlsCert> {
         private_key,
     })
 }
-

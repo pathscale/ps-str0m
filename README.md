@@ -320,32 +320,19 @@ A production worthy SFU probably needs an even more sophisticated
 strategy weighing in all possible time sources to get a good estimate
 of the remote wallclock for a packet.
 
-## Crypto backends
+## Crypto provider
 
-str0m supports multiple crypto backends via feature flags. This fork's default
-is the Rust-only `rust-crypto` profile; native backends remain explicit opt-ins.
+This fork uses the `rust-crypto` feature as its only crypto backend. It is
+enabled by default and uses the `ps-str0m-rust-crypto` provider.
 
-| Feature           | Crate                 | DTLS                             | Platforms |
-|-------------------|-----------------------|----------------------------------|-----------|
-| `aws-lc-rs`       | `str0m-aws-lc-rs`     | dimpl + AWS-LC-RS                | All       |
-| `rust-crypto`     | `ps-str0m-rust-crypto` | dimpl + RustCrypto              | All       |
-| `openssl`         | `str0m-openssl`       | OpenSSL (DTLS 1.2 only)          | All       |
-| `openssl-dimpl`   | `str0m-openssl`       | dimpl + OpenSSL crypto           | All       |
-| `apple-crypto`    | `str0m-apple-crypto`  | dimpl + Apple CryptoKit          | macOS/iOS |
-| `wincrypto`       | `str0m-wincrypto`     | dimpl + Windows CNG             | Windows   |
-| `wincrypto-dimpl` | `str0m-wincrypto`     | Alias for `wincrypto`           | Windows   |
-
-If multiple backend features are enabled, str0m automatically selects the backend in this
-priority order: `aws-lc-rs`, `rust-crypto`, `openssl-dimpl`, `openssl`, `apple-crypto`
-(Apple platforms only), `wincrypto` (Windows only).
-
-If you disable the default features, you MUST explicitly configure an alternative
-crypto backend either process-wide or per-instance.
+If you disable the default features, you MUST explicitly configure a crypto
+provider either process-wide or per-instance.
 
 ### Process-wide default
 
 For applications, the easiest is to set a process-wide default at startup.
-Note that you can use any backend crate directly without enabling its feature flag:
+Note that you can use the RustCrypto provider crate directly without enabling
+its feature flag:
 
 ```rust
 // Set process default (will panic if called twice)
@@ -474,13 +461,13 @@ Rust shines when we can eschew locks and heavily rely `&mut` for data
 write access. Since str0m has no internal threads, we never have to
 deal with shared data. Furthermore the the internals of the library is
 organized such that we don't need multiple references to the same
-entities. In str0m there are no `Rc`, `Mutex`, `mpsc`, `Arc`(*),  or
+entities. In str0m there are no `Rc`, `Mutex`, `mpsc`, `Arc`(*), or
 other locks.
 
 This means all input to the lib can be modelled as
 `handle_something(&mut self, something)`.
 
-(*) Ok. There is one `Arc` if you use Windows where we also require openssl.
+(*) A per-instance crypto provider is held in an `Arc`.
 
 ### Not a standard WebRTC "Peer Connection" API
 

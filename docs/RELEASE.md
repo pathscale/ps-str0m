@@ -5,7 +5,7 @@ The root package is the `ps-str0m` fork harness in this release lane; the owned
 publishable leaf is renamed to `ps-str0m-rust-crypto` and starts at `0.1.0`.
 
 This document covers that leaf only. It does not publish the inherited upstream
-workspace crates and it does not make an all-features Rust-only claim.
+workspace crates or the root `str0m` harness.
 
 ## Package boundary
 
@@ -29,15 +29,9 @@ commands for this lane:
 
 - `str0m-proto`
 - `is`
-- `str0m-aws-lc-rs`
-- `str0m-openssl`
-- `str0m-apple-crypto`
-- `str0m-wincrypto`
 - `str0m-netem`
 
-The root retains upstream native backend features as explicit opt-ins. The
-Rust-only default selects `rust-crypto`; an all-features graph must be reported
-as containing excluded alternatives rather than presented as pure Rust.
+The root package exposes the `rust-crypto` feature as its only crypto backend.
 
 ## Preconditions
 
@@ -105,3 +99,4 @@ inherited from the upstream str0m RustCrypto backend at commit
 the leaf README. Dependency licenses and source provenance are taken from the
 published crate manifests; no third-party dependency source is vendored into
 the leaf.
+

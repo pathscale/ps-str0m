@@ -167,8 +167,7 @@ impl SrtpContext {
         aad[..8].copy_from_slice(&buf[..8]);
         aad[8..12].copy_from_slice(&e_and_si.to_be_bytes());
 
-        let mut output =
-            vec![0_u8; buf.len() + SRTCP_INDEX_LEN + AeadChacha20Poly1305::TAG_LEN];
+        let mut output = vec![0_u8; buf.len() + SRTCP_INDEX_LEN + AeadChacha20Poly1305::TAG_LEN];
         output[0..8].copy_from_slice(&buf[0..8]);
         let input = &buf[8..];
 
@@ -242,8 +241,7 @@ impl SrtpContext {
             aads[1] = &buf[idx_start..];
         };
 
-        let mut output =
-            vec![0_u8; buf.len() - AeadChacha20Poly1305::TAG_LEN - SRTCP_INDEX_LEN];
+        let mut output = vec![0_u8; buf.len() - AeadChacha20Poly1305::TAG_LEN - SRTCP_INDEX_LEN];
         output[0..8].copy_from_slice(&buf[0..8]);
 
         let count = match dec.decrypt(&iv, &aads, input, &mut output[8..]) {

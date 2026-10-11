@@ -1,4 +1,4 @@
-#![cfg(all(feature = "aws-lc-rs", feature = "_internal_test_exports"))]
+#![cfg(all(feature = "rust-crypto", feature = "_internal_test_exports"))]
 
 //! Bandwidth Estimation (BWE) integration tests.
 

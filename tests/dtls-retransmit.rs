@@ -17,13 +17,7 @@
 //!
 //! The scenario asserted here is specific to dimpl's tx-queue semantics,
 //! so the test is compiled only under dimpl-backed crypto providers.
-#![cfg(any(
-    feature = "aws-lc-rs",
-    feature = "rust-crypto",
-    feature = "openssl-dimpl",
-    feature = "wincrypto",
-    feature = "apple-crypto",
-))]
+#![cfg(feature = "rust-crypto")]
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
@@ -273,7 +267,7 @@ fn terminal_dtls_timeout_does_not_rearm_expired_deadline_for(
 /// End-to-end: a DTLS handshake between two peers must complete even
 /// when the link drops packets. Before the fix, dropped handshake
 /// packets stalled for seconds at a time because each lost flight's
-/// retransmit was deferred to the next unrelated wake-up — on a lossy
+/// retransmit was deferred to the next unrelated wake-up, so on a lossy
 /// link the handshake could miss its connect deadline entirely.
 #[test]
 fn dtls_handshake_completes_under_packet_loss() {

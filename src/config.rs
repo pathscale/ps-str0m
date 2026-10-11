@@ -18,7 +18,7 @@ use crate::rtp_::{Bitrate, Extension, ExtensionMap};
 /// Customized config for creating an [`Rtc`] instance.
 ///
 /// ```
-/// # #[cfg(feature = "openssl")] {
+/// # #[cfg(feature = "rust-crypto")] {
 /// use std::time::Instant;
 /// use str0m::RtcConfig;
 ///
@@ -202,7 +202,7 @@ impl RtcConfig {
     /// Tells whether ice lite is enabled.
     ///
     /// ```
-    /// # #[cfg(feature = "openssl")] {
+    /// # #[cfg(feature = "rust-crypto")] {
     /// # use str0m::Rtc;
     /// let config = Rtc::builder();
     ///
@@ -222,7 +222,7 @@ impl RtcConfig {
     /// Clear all configured codecs.
     ///
     /// ```
-    /// # #[cfg(feature = "openssl")] {
+    /// # #[cfg(feature = "rust-crypto")] {
     /// # use std::time::Instant;
     /// # use str0m::RtcConfig;
     /// // For the session to use only OPUS and VP8.

@@ -1,8 +1,9 @@
 {
     "rust-analyzer.cargo.features": [
-        "aws-lc-rs",
+        "rust-crypto",
         "_internal_test_exports"
     ]
     // To enable all features, replace the list above with:
     // "rust-analyzer.cargo.features": "all"
 }
+
