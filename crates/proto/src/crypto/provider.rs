@@ -12,7 +12,6 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use subtle::ConstantTimeEq;
 
 use crate::crypto::dtls::*;
 use crate::crypto::error::CryptoError;
@@ -92,21 +91,16 @@ pub use crate::{CryptoSafe, Sha1HmacProvider};
 // ============================================================================
 
 /// SRTP provider for creating cipher instances and key derivation.
+///
+/// There is no AES anywhere: the one profile is an AEAD over ChaCha20-Poly1305, and session keys are
+/// derived with HKDF-SHA256 instead of RFC 3711's AES-CM key derivation.
 pub trait SrtpProvider: CryptoSafe {
-    /// Factory for AES-128-CM-SHA1-80 ciphers.
-    fn aes_128_cm_sha1_80(&self) -> &'static dyn SupportedAes128CmSha1_80;
+    /// Factory for AEAD-ChaCha20-Poly1305 ciphers.
+    fn aead_chacha20_poly1305(&self) -> &'static dyn SupportedAeadChacha20Poly1305;
 
-    /// Factory for AEAD-AES-128-GCM ciphers.
-    fn aead_aes_128_gcm(&self) -> &'static dyn SupportedAeadAes128Gcm;
-
-    /// Factory for AEAD-AES-256-GCM ciphers.
-    fn aead_aes_256_gcm(&self) -> &'static dyn SupportedAeadAes256Gcm;
-
-    /// Perform AES-128-ECB round for key derivation.
-    fn srtp_aes_128_ecb_round(&self, key: &[u8], input: &[u8], output: &mut [u8]);
-
-    /// Perform AES-256-ECB round for key derivation.
-    fn srtp_aes_256_ecb_round(&self, key: &[u8], input: &[u8], output: &mut [u8]);
+    /// HKDF-SHA256 (RFC 5869) extract-and-expand of `ikm` with `salt` and `info`, filling `out`
+    /// (at most 255 * 32 bytes). Used to derive the SRTP session keys and salts.
+    fn hkdf_sha256(&self, salt: &[u8], ikm: &[u8], info: &[u8], out: &mut [u8]);
 }
 
 /// SHA-256 hash provider.
@@ -206,55 +200,23 @@ pub trait DtlsInstance: CryptoSafe {
     /// Initiate graceful shutdown by sending a DTLS `close_notify` alert.
     fn close(&mut self) -> Result<(), DtlsImplError>;
 }
-
 // ============================================================================
 // SRTP Cipher Factory Traits
 // ============================================================================
 
-/// Factory for AES-128-CM-SHA1-80 cipher instances.
-pub trait SupportedAes128CmSha1_80: CryptoSafe {
+/// Factory for AEAD-ChaCha20-Poly1305 cipher instances.
+pub trait SupportedAeadChacha20Poly1305: CryptoSafe {
     /// Create a cipher instance with the given key.
-    fn create_cipher(&self, key: [u8; 16], encrypt: bool) -> Box<dyn Aes128CmSha1_80Cipher>;
-}
-
-/// Factory for AEAD-AES-128-GCM cipher instances.
-pub trait SupportedAeadAes128Gcm: CryptoSafe {
-    /// Create a cipher instance with the given key.
-    fn create_cipher(&self, key: [u8; 16], encrypt: bool) -> Box<dyn AeadAes128GcmCipher>;
-}
-
-/// Factory for AEAD-AES-256-GCM cipher instances.
-pub trait SupportedAeadAes256Gcm: CryptoSafe {
-    /// Create a cipher instance with the given key.
-    fn create_cipher(&self, key: [u8; 32], encrypt: bool) -> Box<dyn AeadAes256GcmCipher>;
+    fn create_cipher(&self, key: [u8; 32], encrypt: bool) -> Box<dyn AeadChacha20Poly1305Cipher>;
 }
 
 // ============================================================================
 // SRTP Cipher Instance Traits
 // ============================================================================
 
-/// AES-128-CM-SHA1-80 cipher instance for SRTP encryption/decryption.
-pub trait Aes128CmSha1_80Cipher: CryptoSafe {
-    /// Encrypt input with the given IV.
-    fn encrypt(
-        &mut self,
-        iv: &[u8; 16],
-        input: &[u8],
-        output: &mut [u8],
-    ) -> Result<(), CryptoError>;
-
-    /// Decrypt input with the given IV.
-    fn decrypt(
-        &mut self,
-        iv: &[u8; 16],
-        input: &[u8],
-        output: &mut [u8],
-    ) -> Result<(), CryptoError>;
-}
-
-/// AEAD-AES-128-GCM cipher instance for SRTP encryption/decryption.
-pub trait AeadAes128GcmCipher: CryptoSafe {
-    /// Encrypt input with the given IV and AAD.
+/// AEAD-ChaCha20-Poly1305 cipher instance for SRTP encryption/decryption.
+pub trait AeadChacha20Poly1305Cipher: CryptoSafe {
+    /// Encrypt input with the given IV and AAD. `output` is `input.len() + TAG_LEN` bytes.
     fn encrypt(
         &mut self,
         iv: &[u8; 12],
@@ -263,28 +225,8 @@ pub trait AeadAes128GcmCipher: CryptoSafe {
         output: &mut [u8],
     ) -> Result<(), CryptoError>;
 
-    /// Decrypt input with the given IV and AADs.
-    fn decrypt(
-        &mut self,
-        iv: &[u8; 12],
-        aads: &[&[u8]],
-        input: &[u8],
-        output: &mut [u8],
-    ) -> Result<usize, CryptoError>;
-}
-
-/// AEAD-AES-256-GCM cipher instance for SRTP encryption/decryption.
-pub trait AeadAes256GcmCipher: CryptoSafe {
-    /// Encrypt input with the given IV and AAD.
-    fn encrypt(
-        &mut self,
-        iv: &[u8; 12],
-        aad: &[u8],
-        input: &[u8],
-        output: &mut [u8],
-    ) -> Result<(), CryptoError>;
-
-    /// Decrypt input with the given IV and AADs.
+    /// Decrypt input (ciphertext followed by the tag) with the given IV and AADs, which are
+    /// authenticated in order. Returns the plaintext length written to `output`.
     fn decrypt(
         &mut self,
         iv: &[u8; 12],
@@ -298,155 +240,15 @@ pub trait AeadAes256GcmCipher: CryptoSafe {
 // SRTP Profile Definitions
 // ============================================================================
 
-/// AES-128-CM-SHA1-80 SRTP profile.
+/// AEAD-ChaCha20-Poly1305 SRTP profile.
 ///
-/// This struct provides constants, types, and protocol functions for the
-/// AES-128-CM-SHA1-80 SRTP protection profile (RFC 5764).
+/// The packet construction is RFC 7714's AEAD SRTP/SRTCP (AAD, IV and tag placement, E flag and
+/// SRTCP index), with ChaCha20-Poly1305 (RFC 8439) as the AEAD. Session keys and salts come from
+/// HKDF-SHA256 over the DTLS-exported master key and salt rather than the AES-CM KDF of RFC 3711.
 #[derive(Debug, Clone, Copy)]
-pub struct Aes128CmSha1_80;
+pub struct AeadChacha20Poly1305;
 
-impl Aes128CmSha1_80 {
-    /// Key length in bytes.
-    pub const KEY_LEN: usize = 16;
-    /// Salt length in bytes.
-    pub const SALT_LEN: usize = 14;
-    /// HMAC key length in bytes.
-    pub const HMAC_KEY_LEN: usize = 20;
-    /// HMAC tag length in bytes.
-    pub const HMAC_TAG_LEN: usize = 10;
-
-    /// Compute and append RTP HMAC tag.
-    pub fn rtp_hmac(
-        sha1_hmac: impl Fn(&[u8], &[&[u8]]) -> [u8; 20],
-        key: &[u8],
-        buf: &mut [u8],
-        srtp_index: u64,
-        hmac_start: usize,
-    ) {
-        let roc = (srtp_index >> 16) as u32;
-        let tag = sha1_hmac(key, &[&buf[..hmac_start], &roc.to_be_bytes()]);
-        buf[hmac_start..(hmac_start + Self::HMAC_TAG_LEN)]
-            .copy_from_slice(&tag[0..Self::HMAC_TAG_LEN]);
-    }
-
-    /// Verify RTP HMAC tag.
-    pub fn rtp_verify(
-        sha1_hmac: impl Fn(&[u8], &[&[u8]]) -> [u8; 20],
-        key: &[u8],
-        buf: &[u8],
-        srtp_index: u64,
-        cmp: &[u8],
-    ) -> bool {
-        let roc = (srtp_index >> 16) as u32;
-        let tag = sha1_hmac(key, &[buf, &roc.to_be_bytes()]);
-        tag[0..Self::HMAC_TAG_LEN].ct_eq(cmp).into()
-    }
-
-    /// Compute RTP IV.
-    pub fn rtp_iv(salt: [u8; 14], ssrc: u32, srtp_index: u64) -> [u8; 16] {
-        let mut iv = [0; 16];
-        let ssrc_be = ssrc.to_be_bytes();
-        let srtp_be = srtp_index.to_be_bytes();
-        iv[4..8].copy_from_slice(&ssrc_be);
-        for i in 0..8 {
-            iv[i + 6] ^= srtp_be[i];
-        }
-        for i in 0..14 {
-            iv[i] ^= salt[i];
-        }
-        iv
-    }
-
-    /// Compute and append RTCP HMAC tag.
-    pub fn rtcp_hmac(
-        sha1_hmac: impl Fn(&[u8], &[&[u8]]) -> [u8; 20],
-        key: &[u8],
-        buf: &mut [u8],
-        hmac_index: usize,
-    ) {
-        let tag = sha1_hmac(key, &[&buf[0..hmac_index]]);
-        buf[hmac_index..(hmac_index + Self::HMAC_TAG_LEN)]
-            .copy_from_slice(&tag[0..Self::HMAC_TAG_LEN]);
-    }
-
-    /// Verify RTCP HMAC tag.
-    pub fn rtcp_verify(
-        sha1_hmac: impl Fn(&[u8], &[&[u8]]) -> [u8; 20],
-        key: &[u8],
-        buf: &[u8],
-        cmp: &[u8],
-    ) -> bool {
-        let tag = sha1_hmac(key, &[buf]);
-        tag[0..Self::HMAC_TAG_LEN].ct_eq(cmp).into()
-    }
-}
-
-/// AEAD-AES-128-GCM SRTP profile.
-///
-/// This struct provides constants, types, and protocol functions for the
-/// AEAD-AES-128-GCM SRTP protection profile (RFC 7714).
-#[derive(Debug, Clone, Copy)]
-pub struct AeadAes128Gcm;
-
-impl AeadAes128Gcm {
-    /// Key length in bytes.
-    pub const KEY_LEN: usize = 16;
-    /// Salt length in bytes.
-    pub const SALT_LEN: usize = 12;
-    /// RTCP AAD length in bytes.
-    pub const RTCP_AAD_LEN: usize = 12;
-    /// Authentication tag length in bytes.
-    pub const TAG_LEN: usize = 16;
-    /// IV length in bytes.
-    pub const IV_LEN: usize = 12;
-
-    /// Compute RTP IV.
-    pub fn rtp_iv(salt: [u8; 12], ssrc: u32, roc: u32, seq: u16) -> [u8; 12] {
-        // See: https://www.rfc-editor.org/rfc/rfc7714#section-8.1
-        let mut iv = [0; 12];
-
-        let ssrc_be = ssrc.to_be_bytes();
-        let roc_be = roc.to_be_bytes();
-        let seq_be = seq.to_be_bytes();
-
-        iv[2..6].copy_from_slice(&ssrc_be);
-        iv[6..10].copy_from_slice(&roc_be);
-        iv[10..12].copy_from_slice(&seq_be);
-
-        for i in 0..12 {
-            iv[i] ^= salt[i];
-        }
-
-        iv
-    }
-
-    /// Compute RTCP IV.
-    pub fn rtcp_iv(salt: [u8; 12], ssrc: u32, srtp_index: u32) -> [u8; 12] {
-        // See: https://www.rfc-editor.org/rfc/rfc7714#section-9.1
-        let mut iv = [0; 12];
-
-        let ssrc_be = ssrc.to_be_bytes();
-        let srtp_be = srtp_index.to_be_bytes();
-
-        iv[2..6].copy_from_slice(&ssrc_be);
-        iv[8..12].copy_from_slice(&srtp_be);
-
-        for i in 0..12 {
-            iv[i] ^= salt[i];
-        }
-
-        iv
-    }
-}
-
-/// AEAD-AES-256-GCM SRTP profile.
-///
-/// This struct provides constants, types, and protocol functions for the
-/// AEAD-AES-256-GCM SRTP protection profile (RFC 7714).
-#[derive(Debug, Clone, Copy)]
-pub struct AeadAes256Gcm;
-
-impl AeadAes256Gcm {
+impl AeadChacha20Poly1305 {
     /// Key length in bytes.
     pub const KEY_LEN: usize = 32;
     /// Salt length in bytes.
@@ -458,18 +260,13 @@ impl AeadAes256Gcm {
     /// IV length in bytes.
     pub const IV_LEN: usize = 12;
 
-    /// Compute RTP IV.
+    /// Compute RTP IV (RFC 7714 Section 8.1 layout).
     pub fn rtp_iv(salt: [u8; 12], ssrc: u32, roc: u32, seq: u16) -> [u8; 12] {
-        // See: https://www.rfc-editor.org/rfc/rfc7714#section-8.1
         let mut iv = [0; 12];
 
-        let ssrc_be = ssrc.to_be_bytes();
-        let roc_be = roc.to_be_bytes();
-        let seq_be = seq.to_be_bytes();
-
-        iv[2..6].copy_from_slice(&ssrc_be);
-        iv[6..10].copy_from_slice(&roc_be);
-        iv[10..12].copy_from_slice(&seq_be);
+        iv[2..6].copy_from_slice(&ssrc.to_be_bytes());
+        iv[6..10].copy_from_slice(&roc.to_be_bytes());
+        iv[10..12].copy_from_slice(&seq.to_be_bytes());
 
         for i in 0..12 {
             iv[i] ^= salt[i];
@@ -478,16 +275,12 @@ impl AeadAes256Gcm {
         iv
     }
 
-    /// Compute RTCP IV.
-    pub fn rtcp_iv(salt: [u8; 12], ssrc: u32, srtp_index: u32) -> [u8; 12] {
-        // See: https://www.rfc-editor.org/rfc/rfc7714#section-9.1
+    /// Compute RTCP IV (RFC 7714 Section 9.1 layout).
+    pub fn rtcp_iv(salt: [u8; 12], ssrc: u32, srtcp_index: u32) -> [u8; 12] {
         let mut iv = [0; 12];
 
-        let ssrc_be = ssrc.to_be_bytes();
-        let srtp_be = srtp_index.to_be_bytes();
-
-        iv[2..6].copy_from_slice(&ssrc_be);
-        iv[8..12].copy_from_slice(&srtp_be);
+        iv[2..6].copy_from_slice(&ssrc.to_be_bytes());
+        iv[8..12].copy_from_slice(&srtcp_index.to_be_bytes());
 
         for i in 0..12 {
             iv[i] ^= salt[i];

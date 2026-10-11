@@ -1,20 +1,22 @@
 [package]
-name = "str0m-proto"
-version = "0.7.0"
+name = "ps-str0m-proto"
+version = "0.8.0"
 authors = ["Martin Algesten <martin@algesten.se>"]
-description = "Internal crate for str0m. Not intended for direct use."
+description = "Internal crate for ps-str0m (AES-free fork of str0m). Not intended for direct use."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/algesten/str0m"
+repository = "https://github.com/pathscale/ps-str0m"
 readme = "README.md"
 edition = "2024"
 
 # MSRV
 rust-version = "1.85.0"
 
+[lib]
+name = "str0m_proto"
+
 [features]
 default = ["dtls"]
 dtls = ["dep:dimpl"]
-openssl = ["dep:openssl"]
 pii = []
 
 # When we are running in test mode
@@ -30,5 +32,3 @@ subtle.workspace = true
 fastrand.workspace = true
 serde.workspace = true
 
-# For openssl errors
-openssl = { workspace = true, optional = true }

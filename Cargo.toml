@@ -1,10 +1,10 @@
 [package]
-name = "str0m"
-version = "0.24.1"
+name = "ps-str0m"
+version = "0.25.0"
 authors = ["Martin Algesten <martin@algesten.se>", "Hugo Tunius <h@tunius.se>", "Davide Bertola <dade@dadeb.it>"]
-description = "WebRTC library in Sans-IO style"
+description = "WebRTC library in Sans-IO style; fork of str0m with a pure-Rust, AES-free stack (DTLS on ChaCha20-Poly1305, ChaCha20-Poly1305 SRTP)"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/algesten/str0m"
+repository = "https://github.com/pathscale/ps-str0m"
 readme = "README.md"
 keywords = ["webrtc", "streaming", "video", "audio", "media"]
 categories = ["web-programming", "multimedia", "network-programming"]
@@ -29,25 +29,17 @@ members = [
   "crates/is",
   "crates/netem",
   "crates/_str0m_test",
-  "crypto/aws-lc-rs",
-  "crypto/rust-crypto",
-  "crypto/openssl",
-  "crypto/apple-crypto",
-  "crypto/wincrypto"
+  "crypto/rust-crypto"
 ]
 exclude = ["crates/fuzz"]
 
 [workspace.dependencies]
 # Internal crates
-str0m = { version = "0.24.1", path = ".", default-features = false }
-str0m-proto = { version = "0.7.0", path = "crates/proto", default-features = false }
+str0m = { package = "ps-str0m", version = "0.25.0", path = ".", default-features = false }
+str0m-proto = { package = "ps-str0m-proto", version = "0.8.0", path = "crates/proto", default-features = false }
 is = { version = "0.11.1", path = "crates/is", default-features = false }
 str0m-netem = { version = "0.4.0", path = "crates/netem" }
-str0m-aws-lc-rs = { version = "0.6.0", path = "crypto/aws-lc-rs" }
-str0m-rust-crypto = { package = "ps-str0m-rust-crypto", version = "0.1.0" }
-str0m-openssl = { version = "0.6.0", path = "crypto/openssl" }
-str0m-apple-crypto = { version = "0.6.0", path = "crypto/apple-crypto" }
-str0m-wincrypto = { version = "0.8.1", path = "crypto/wincrypto" }
+str0m-rust-crypto = { package = "ps-str0m-rust-crypto", version = "0.2.0", path = "crypto/rust-crypto" }
 _str0m_test = { path = "crates/_str0m_test" }
 
 # Core dependencies
@@ -58,7 +50,7 @@ combine = "4.6.6"
 subtle = "2.0.0"
 arrayvec = "0.7.6"
 serde = { version = "1.0.152", features = ["derive"] }
-dimpl = { version = "0.7.4", default-features = false }
+dimpl = { package = "ps-dimpl", version = "0.8.0", default-features = false }
 drv = { version = "0.4.3" }
 time = "0.3"
 base64ct = "1"
@@ -97,19 +89,14 @@ pcap-file = "2.0.0"
 regex = "1.11.1"
 rand = "0.9.0"
 
+[lib]
+name = "str0m"
+
 [features]
-# Keep upstream native providers available as explicit opt-ins. The fork's
-# default profile is the extracted RustCrypto provider.
+# Pure Rust only: the RustCrypto provider is the one crypto backend (no AES,
+# no native libraries).
 default = ["rust-crypto"]
-aws-lc-rs = ["dep:str0m-aws-lc-rs"]
 rust-crypto = ["dep:str0m-rust-crypto"]
-openssl = ["dep:str0m-openssl"]
-openssl-dimpl = ["dep:str0m-openssl", "str0m-openssl/dimpl"]
-wincrypto = ["dep:str0m-wincrypto"]
-# Compatibility alias: wincrypto always uses dimpl + CNG.
-wincrypto-dimpl = ["wincrypto"]
-apple-crypto = ["dep:str0m-apple-crypto"]
-vendored = ["str0m-openssl?/vendored"]
 unversioned = []
 
 # Redacts personally identifiable information (PII) from logs debug and above
@@ -149,16 +136,9 @@ is.workspace = true
 drv = { workspace = true, optional = true }
 
 # Crypto providers
-str0m-aws-lc-rs = { workspace = true, optional = true }
 str0m-rust-crypto = { workspace = true, optional = true }
-str0m-openssl = { workspace = true, optional = true }
 
-[target.'cfg(target_vendor = "apple")'.dependencies]
-str0m-apple-crypto = { workspace = true, optional = true }
 
-[target.'cfg(windows)'.dependencies]
-# Windows Crypto (dimpl + CNG)
-str0m-wincrypto = { workspace = true, optional = true }
 
 [dev-dependencies]
 rouille.workspace = true

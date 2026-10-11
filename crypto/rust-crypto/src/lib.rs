@@ -23,9 +23,8 @@ use str0m_proto::crypto::CryptoProvider;
 ///
 /// # Supported SRTP Profiles
 ///
-/// - `SRTP_AES128_CM_SHA1_80`
-/// - `SRTP_AEAD_AES_128_GCM`
-/// - `SRTP_AEAD_AES_256_GCM`
+/// - `SRTP_AEAD_CHACHA20_POLY1305` (RFC 7714 construction with ChaCha20-Poly1305; HKDF-SHA256 session
+///   keys). No AES is implemented or negotiated.
 pub fn default_provider() -> CryptoProvider {
     static SRTP: RustCryptoSrtpProvider = RustCryptoSrtpProvider;
     static SHA1_HMAC: RustCryptoSha1HmacProvider = RustCryptoSha1HmacProvider;

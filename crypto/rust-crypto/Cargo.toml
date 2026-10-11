@@ -1,8 +1,8 @@
 [package]
 name = "ps-str0m-rust-crypto"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Martin Algesten <martin@algesten.se>"]
-description = "Pure RustCrypto DTLS and SRTP provider for the str0m WebRTC stack"
+description = "Pure RustCrypto DTLS and SRTP provider for ps-str0m: ChaCha20-Poly1305 only, no AES"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pathscale/ps-str0m"
 readme = "README.md"
@@ -14,12 +14,11 @@ edition = "2024"
 rust-version = "1.85.0"
 
 [dependencies]
-str0m-proto = { version = "0.7.0", default-features = false, features = ["dtls"] }
-dimpl = { version = "0.7.4", default-features = false, features = ["rust-crypto"] }
+str0m-proto = { workspace = true, features = ["dtls"] }
+dimpl = { workspace = true, features = ["rust-crypto"] }
 hmac = "0.12.1"
-aes-gcm = "0.10"
-aes = "0.8"
-ctr = "0.9"
+hkdf = "0.12"
+chacha20poly1305 = "0.10"
 p256 = { version = "0.13", default-features = false, features = ["ecdh", "ecdsa", "pkcs8", "std"] }
 rand_core = { version = "0.6", default-features = false, features = ["getrandom", "std"] }
 sha1 = "0.10"
