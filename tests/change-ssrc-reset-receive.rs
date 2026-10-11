@@ -10,6 +10,7 @@ use tracing::info;
 mod common;
 use common::{TestRtc, connect_l_r, connect_l_r_with_rtc, init_crypto_default, init_log, progress};
 
+#[allow(clippy::too_many_arguments)]
 fn send_frame(
     l: &mut TestRtc,
     r: &mut TestRtc,

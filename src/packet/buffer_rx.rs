@@ -1392,15 +1392,15 @@ mod test {
             }
         }
         let anchor = base.checked_add(Duration::from_secs(low)).unwrap();
-        let timeout = Some(Duration::from_secs(600));
-        assert!(anchor.checked_add(timeout.unwrap()).is_none());
+        let timeout = Duration::from_secs(600);
+        assert!(anchor.checked_add(timeout).is_none());
 
         let mut buf = DepacketizingBuffer::new(CodecDepacketizer::Boxed(Box::new(TestDepack)), 3);
         buf.push(test_meta(base, 1, 1, 0), [1, 9]);
-        buf.pop(base, timeout).unwrap().unwrap();
+        buf.pop(base, Some(timeout)).unwrap().unwrap();
         buf.push(test_meta(anchor, 3, 3, 0), [1, 9]);
-        assert!(buf.pop(anchor, timeout).is_none());
-        assert_eq!(buf.poll_timeout(timeout), None);
+        assert!(buf.pop(anchor, Some(timeout)).is_none());
+        assert_eq!(buf.poll_timeout(Some(timeout)), None);
         assert!(buf.pop(anchor, Some(Duration::ZERO)).unwrap().is_ok());
     }
 
