@@ -1,102 +1,88 @@
-# Release: `ps-str0m-rust-crypto`
+# Release: ps-str0m
 
-This fork keeps the root package name `str0m` for API and feature compatibility.
-The root package is the `ps-str0m` fork harness in this release lane; the owned
-publishable leaf is renamed to `ps-str0m-rust-crypto` and starts at `0.1.0`.
+The fork publishes four production packages. Their library imports retain the
+existing names, so downstream Rust source does not need to change.
 
-This document covers that leaf only. It does not publish the inherited upstream
-workspace crates or the root `str0m` harness.
+| Publish order | Package | Version | Library import |
+| --- | --- | --- | --- |
+| 1 | ps-str0m-proto | 0.8.0 | str0m_proto |
+| 2 | ps-str0m-is | 0.11.1 | is |
+| 3 | ps-str0m-rust-crypto | 0.2.0 | ps_str0m_rust_crypto |
+| 4 | ps-str0m | 0.25.0 | str0m |
 
-## Package boundary
+`ps-dimpl 0.8.0` is already published and is an external registry dependency.
+The fork's production graph is:
 
 ```text
-str0m (ps-str0m fork harness; not a publication target in this lane)
-  └── rust-crypto feature
-        └── ps-str0m-rust-crypto 0.1.0
-              ├── str0m-proto ^0.7 (published dependency)
-              ├── dimpl ^0.7 (published dependency, rust-crypto feature)
-              └── RustCrypto provider and certificate extraction
+ps-str0m 0.25.0
+├── ps-str0m-proto ^0.8.0
+│   └── ps-dimpl ^0.8.0 (dtls feature)
+├── ps-str0m-is ^0.11.1
+│   └── ps-str0m-proto ^0.8.0
+├── ps-str0m-rust-crypto ^0.2.0 (default rust-crypto feature)
+│   ├── ps-str0m-proto ^0.8.0
+│   └── ps-dimpl ^0.8.0 (rust-crypto, default-features = false)
+└── external Rust dependencies
 ```
 
-The provider retains inherited implementation code from upstream
-`crypto/rust-crypto`. The fork-owned changes are the package identity,
-certificate-generation seam, and dependency feature selection. The leaf
-contains `LICENSE-MIT.txt` and `LICENSE-APACHE.txt`; its manifest remains
-`MIT OR Apache-2.0`.
+The only built-in crypto provider uses pure-Rust ChaCha20-Poly1305 for DTLS
+and SRTP, with HKDF-SHA256 for SRTP session keys and salts. The example web
+servers expose HTTP signaling behind an external TLS reverse proxy.
 
-The following packages remain external or inherited and are not publication
-commands for this lane:
+## Package boundaries
 
-- `str0m-proto`
-- `is`
-- `str0m-netem`
+Every production package declares its license, description, repository, and
+README. Local production dependencies carry both a caret version and a path;
+Cargo rewrites the paths to registry dependencies in published packages.
 
-The root package exposes the `rust-crypto` feature as its only crypto backend.
+`ps-str0m-netem 0.4.0` is a development-only network emulator with
+`publish = false`. `_str0m_test 0.1.0` is an unpublished feature-enabling
+helper. Both are path-only root dev dependencies so Cargo omits them from the
+published manifest. `str0m-fuzz 0.0.0` is excluded from the workspace and has
+`publish = false`. None of these packages belongs in the publish order.
 
-## Preconditions
+## Automated publication
 
-Before publication, root must verify the exact candidate source and resolved
-published dependency graph:
+`.github/workflows/publish.yml` follows the house convention: production
+manifest changes on `main` trigger publication on `ubicloud-standard-2`.
+Manual dispatch on `main` can bootstrap or resume the release. Configure the
+repository secret `CARGO_REGISTRY_TOKEN` with permission to publish all four
+production package names.
 
-1. The provider manifest has no git or path dependency and uses published caret
-   versions for `str0m-proto`, `dimpl`, and its RustCrypto/X.509 dependencies.
-2. The selected graph excludes `rcgen`, `aws-lc-rs`, `aws-lc-sys`, `ring`,
-   OpenSSL, `cc`, bindgen, and unapproved native crypto edges.
-3. The package includes the README, source, `LICENSE-MIT.txt`, and
-   `LICENSE-APACHE.txt` in `cargo package --list`.
-4. The certificate source fix has passed the root compile. The generated DER
-   certificate must match its P-256 private key and expose the fingerprint used
-   by the DTLS peer.
-5. Two provider-backed DTLS peers complete handshake, retransmission,
-   certificate verification, application data, and close. A real SRTP loopback
-   encrypts/decrypts packets, advances send/receive counters, and rejects
-   altered authentication data.
-6. The root harness with
-   `default-features = false, features = ["rust-crypto"]` selects this leaf
-   and completes the same DTLS/SRTP acceptance. Root owns the lockfile and
-   integration evidence.
+The workflow runs the four package steps in the order above. Each step checks
+the manifest's version on crates.io once. An existing, non-yanked version is
+skipped; a missing version is published with ordinary `cargo publish -p`,
+including Cargo's package verification. Registry lookup errors, yanked
+versions, and publish failures stop the job. Later version bumps therefore
+publish only missing versions, and a partially completed release can resume.
 
-## Fork-only local QA
+For a release, bump the affected package versions and the workspace dependency
+ranges together, then merge onto `main`. Ensure any new external dependency
+versions are already published. Publication is irreversible, so review the
+package names, dependency ranges, and release source before merging.
 
-When testing the unpublished fork checkout against local provider or proto
-paths, use the opt-in wrapper and its ignored `.cargo/local-engine.toml`:
+The equivalent first-publication order is:
 
-```sh
-scripts/local-engine.sh check -p str0m --no-default-features --features rust-crypto
-scripts/local-engine.sh test -p str0m --no-default-features --features rust-crypto --test handshake-direct
-```
-
-The wrapper refuses concurrent invocations, keeps its lock snapshot below the
-repository's `.cargo` directory, and restores or removes `Cargo.lock` on every
-exit path. It is only for fork-local checks. The wrapper must not be used for
-the packaged leaf verification below: that check must resolve the published
-caret dependencies without a local patch.
-
-## Leaf-only release procedure
-
-The only publication command in this lane is:
-
-```sh
-cargo package --list -p ps-str0m-rust-crypto
-cargo publish --dry-run -p ps-str0m-rust-crypto
+```text
+cargo publish -p ps-str0m-proto
+cargo publish -p ps-str0m-is
 cargo publish -p ps-str0m-rust-crypto
+cargo publish -p ps-str0m
 ```
 
-Wait for the package to be indexed, then verify its published metadata and
-version through crates.io. Do not add publication commands for the inherited
-workspace crates or for the root `str0m` harness to this release.
-
-If a future release changes the `str0m-proto` or `dimpl` compatibility range,
-coordinate that shared dependency decision before bumping this leaf. Do not
-publish a second copy against an incompatible unpublished protocol crate.
+Once the four versions are indexed, downstream workspaces can remove their
+`ps-str0m` and `ps-str0m-rust-crypto` path patches. Published `ps-dimpl 0.8.0`
+already supplies the provider API, so a dimpl path patch is unnecessary unless
+the consumer separately needs changes newer than that release.
 
 ## License provenance
 
-The leaf inherits the upstream str0m MIT/Apache-2.0 license expression and
+The provider inherits the upstream str0m MIT/Apache-2.0 license expression and
 carries both license texts in its own package directory. Its provider source is
 inherited from the upstream str0m RustCrypto backend at commit
 `393a3d238aa466ba9edc52fba823f86563642c20`, with the fork changes described in
-the leaf README. Dependency licenses and source provenance are taken from the
-published crate manifests; no third-party dependency source is vendored into
-the leaf.
+the provider README. Dependency licenses and source provenance come from the
+published crate manifests and the resolved release graph.
 
+Publication metadata and a successful upload do not establish media-session
+behavior. Runtime acceptance evidence belongs with the exact released source.
