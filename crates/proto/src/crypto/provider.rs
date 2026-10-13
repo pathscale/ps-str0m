@@ -23,7 +23,7 @@ use crate::crypto::error::CryptoError;
 ///
 /// This struct holds references to all cryptographic components needed
 /// for WebRTC operations. Users can provide custom implementations of each component
-/// to replace the default OpenSSL-based provider.
+/// to replace the default pure-Rust RustCrypto provider.
 ///
 /// # Design
 ///
@@ -91,8 +91,7 @@ pub use crate::{CryptoSafe, Sha1HmacProvider};
 
 /// SRTP provider for creating cipher instances and key derivation.
 ///
-/// There is no AES anywhere: the one profile is an AEAD over ChaCha20-Poly1305, and session keys are
-/// derived with HKDF-SHA256 instead of RFC 3711's AES-CM key derivation.
+/// The one profile is AEAD-ChaCha20-Poly1305, with session keys derived using HKDF-SHA256.
 pub trait SrtpProvider: CryptoSafe {
     /// Factory for AEAD-ChaCha20-Poly1305 ciphers.
     fn aead_chacha20_poly1305(&self) -> &'static dyn SupportedAeadChacha20Poly1305;
@@ -243,7 +242,7 @@ pub trait AeadChacha20Poly1305Cipher: CryptoSafe {
 ///
 /// The packet construction is RFC 7714's AEAD SRTP/SRTCP (AAD, IV and tag placement, E flag and
 /// SRTCP index), with ChaCha20-Poly1305 (RFC 8439) as the AEAD. Session keys and salts come from
-/// HKDF-SHA256 over the DTLS-exported master key and salt rather than the AES-CM KDF of RFC 3711.
+/// HKDF-SHA256 over the DTLS-exported master key and salt.
 #[derive(Debug, Clone, Copy)]
 pub struct AeadChacha20Poly1305;
 

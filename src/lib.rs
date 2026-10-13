@@ -24,24 +24,24 @@
 //!
 //! ## TLS
 //!
-//! For the browser to do WebRTC, all traffic must be under TLS. The
-//! project ships with a self-signed certificate that is used for the
-//! examples. The certificate is for hostname `str0m.test` since TLD .test
-//! should never resolve to a real DNS name.
+//! Browser signaling requires a secure origin. The example web servers expose
+//! HTTP on port 3000; put a TLS reverse proxy in front of that port and connect
+//! the browser to the proxy's HTTPS address. Media security is handled separately
+//! by the RustCrypto DTLS and SRTP provider.
 //!
 //! ```text
-//! cargo run --example chat
+//! cargo run --example chat --features examples
 //! ```
 //!
-//! The log should prompt you to connect a browser to https://10.0.0.103:3000 – this will
-//! most likely cause a security warning that you must get the browser to accept.
+//! The log prints the internal HTTP signaling address. Configure the TLS proxy
+//! to forward requests to that address.
 //!
 //! The [`http-post`][x-post] example roughly illustrates how to receive
 //! media data from a browser client. The example is single threaded and
 //! is a bit simpler than the chat. It is a good starting point to understand the API.
 //!
 //! ```text
-//! cargo run --example http-post
+//! cargo run --example http-post --features examples
 //! ```
 //!
 //! ### Real example

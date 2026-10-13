@@ -41,9 +41,6 @@ pub fn main() {
     // Run with whatever is configured.
     from_feature_flags().install_process_default();
 
-    let certificate = include_bytes!("cer.pem").to_vec();
-    let private_key = include_bytes!("key.pem").to_vec();
-
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = util::select_host_address();
 
@@ -58,16 +55,17 @@ pub fn main() {
     // The run loop is on a separate thread to the web server.
     thread::spawn(move || run(socket, rx));
 
-    let server = Server::new_ssl(
-        "0.0.0.0:3000",
-        move |request| web_request(request, addr, tx.clone()),
-        certificate,
-        private_key,
-    )
+    let server = Server::new("0.0.0.0:3000", move |request| {
+        web_request(request, addr, tx.clone())
+    })
     .expect("starting the web server");
 
     let port = server.server_addr().port();
-    info!("Connect a browser to https://{:?}:{:?}", addr.ip(), port);
+    info!(
+        "HTTP signaling at http://{:?}:{:?}; expose it through a TLS reverse proxy",
+        addr.ip(),
+        port
+    );
 
     server.run();
 }

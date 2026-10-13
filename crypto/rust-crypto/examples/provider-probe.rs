@@ -67,7 +67,7 @@ fn verify_certificate_fingerprint(provider: &CryptoProvider, certificate: &DtlsC
 }
 
 fn verify_srtp_authentication(provider: &CryptoProvider) {
-    let key = [0x11; 16];
+    let key = [0x11; 32];
     let iv = [0x22; 12];
     let aad = b"ps-str0m provider probe";
     let plaintext = b"authenticated SRTP payload";
@@ -75,7 +75,7 @@ fn verify_srtp_authentication(provider: &CryptoProvider) {
     let mut protected = vec![0; plaintext.len() + 16];
     let mut encryptor = provider
         .srtp_provider
-        .aead_aes_128_gcm()
+        .aead_chacha20_poly1305()
         .create_cipher(key, true);
     encryptor
         .encrypt(&iv, aad, plaintext, &mut protected)
@@ -84,7 +84,7 @@ fn verify_srtp_authentication(provider: &CryptoProvider) {
     let mut recovered = vec![0; plaintext.len()];
     let mut decryptor = provider
         .srtp_provider
-        .aead_aes_128_gcm()
+        .aead_chacha20_poly1305()
         .create_cipher(key, false);
     let recovered_len = decryptor
         .decrypt(&iv, &[aad], &protected, &mut recovered)
@@ -97,7 +97,7 @@ fn verify_srtp_authentication(provider: &CryptoProvider) {
     let mut sink = vec![0; plaintext.len()];
     let mut rejecting_decryptor = provider
         .srtp_provider
-        .aead_aes_128_gcm()
+        .aead_chacha20_poly1305()
         .create_cipher(key, false);
     assert!(
         rejecting_decryptor

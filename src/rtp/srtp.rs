@@ -301,7 +301,7 @@ impl SrtpKey {
     }
 
     /// One session key or salt: HKDF-SHA256 over the master key, salted with the master salt, with
-    /// the RFC 3711 label in the info so every output is independent. Replaces RFC 3711's AES-CM KDF.
+    /// the RFC 3711 label in the info so every output is independent.
     fn derive(&self, crypto: &dyn SrtpProvider, label: u8, out: &mut [u8]) {
         let mut info = [0_u8; KDF_INFO.len() + 1];
         info[..KDF_INFO.len()].copy_from_slice(KDF_INFO);

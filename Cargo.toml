@@ -2,7 +2,7 @@
 name = "ps-str0m"
 version = "0.25.0"
 authors = ["Martin Algesten <martin@algesten.se>", "Hugo Tunius <h@tunius.se>", "Davide Bertola <dade@dadeb.it>"]
-description = "WebRTC library in Sans-IO style; fork of str0m with a pure-Rust, AES-free stack (DTLS on ChaCha20-Poly1305, ChaCha20-Poly1305 SRTP)"
+description = "WebRTC library in Sans-IO style; fork of str0m with pure-Rust ChaCha20-Poly1305 DTLS and SRTP"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pathscale/ps-str0m"
 readme = "README.md"
@@ -14,14 +14,6 @@ exclude = ["/cargo_deny.sh", "/deny.toml", "/run-fuzz.sh"]
 # MSRV
 rust-version = "1.85.0"
 
-# Notes on OpenSSL
-# - Vendored (static link source build) ensures version consistency and easier
-#   to build but increases size.
-# - Non-vendored (dynamic link) uses system libraries, reducing size but may
-#   cause compatibility issues.
-# Choose based on security and footprint needs.
-# For large deployments sharing OS images, OS updates can be easier for
-# security patching than updating statically linked software.
 
 [workspace]
 members = [
@@ -55,8 +47,6 @@ drv = { version = "0.4.3" }
 time = "0.3"
 base64ct = "1"
 
-# Proto dependencies
-openssl = "0.10.78"
 
 # IS dependencies
 crc = "3"
@@ -64,13 +54,10 @@ hmac = "0.12.1"
 sha1 = "0.10"
 
 # Crypto backend dependencies
-aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
-aes-gcm = "0.10"
-aes = "0.8"
-ctr = "0.9"
+
 p256 = { version = "0.13", features = ["ecdh"] }
 sha2 = "0.10"
-openssl-sys = "0.9.80"
+
 libc = "0.2"
 der = "0.7"
 pkcs8 = { version = "0.10", features = ["pem"] }
@@ -93,8 +80,7 @@ rand = "0.9.0"
 name = "str0m"
 
 [features]
-# Pure Rust only: the RustCrypto provider is the one crypto backend (no AES,
-# no native libraries).
+# The RustCrypto provider supplies pure-Rust ChaCha20-Poly1305 DTLS and SRTP.
 default = ["rust-crypto"]
 rust-crypto = ["dep:str0m-rust-crypto"]
 unversioned = []
@@ -102,9 +88,8 @@ unversioned = []
 # Redacts personally identifiable information (PII) from logs debug and above
 pii = ["str0m-proto/pii", "is/pii"]
 
-# The examples require TLS for the web server via rouille.
-# We use rustls instead of ssl to avoid OpenSSL dependency issues on Windows.
-examples = ["rouille/rustls"]
+# Example signaling uses HTTP behind a TLS reverse proxy.
+examples = []
 
 _internal_dont_use_log_stats = []
 _internal_test_exports = ["str0m-proto/_internal_test_exports", "is/_internal_test_exports"]

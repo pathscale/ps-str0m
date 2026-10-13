@@ -27,7 +27,7 @@ pub(crate) fn test_default_provider() -> &'static CryptoProvider {
 
 /// Create the crypto provider selected by feature flags.
 ///
-/// The fork has one backend: the pure-Rust, AES-free `rust-crypto` provider.
+/// The fork has one backend: the pure-Rust ChaCha20-Poly1305 `rust-crypto` provider.
 #[allow(unreachable_code, clippy::needless_return)]
 pub fn from_feature_flags() -> CryptoProvider {
     #[cfg(feature = "rust-crypto")]

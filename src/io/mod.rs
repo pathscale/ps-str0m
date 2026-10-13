@@ -21,9 +21,8 @@ pub(crate) const DATAGRAM_MAX_PACKET_SIZE: usize = 2000;
 /// Max expected RTP header over, with full extensions etc.
 pub const MAX_RTP_OVERHEAD: usize = 80;
 
-/// Max expected DTLS record overhead (record header + explicit nonce + AEAD
-/// auth tag), worst case across DTLS 1.2/1.3 and common AEAD ciphers
-/// (AES-GCM, AES-CCM, CHACHA20-POLY1305).
+/// Conservative DTLS record overhead bound (record header, authentication tag,
+/// and framing) for ChaCha20-Poly1305 across DTLS 1.2/1.3.
 pub const MAX_DTLS_OVERHEAD: usize = 48;
 
 mod error;

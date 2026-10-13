@@ -1,17 +1,15 @@
 # ps-str0m-rust-crypto
 
-`ps-str0m-rust-crypto` is the selected RustCrypto provider for the
-[str0m](https://github.com/algesten/str0m) Sans-I/O WebRTC stack. It supplies
+`ps-str0m-rust-crypto` is the RustCrypto provider for the
+[ps-str0m](https://github.com/pathscale/ps-str0m) Sans-I/O WebRTC stack. It supplies
 DTLS, SRTP, STUN HMAC, and certificate-fingerprint operations through
 str0m-proto's `CryptoProvider` interface.
 
 The package retains inherited `str0m-rust-crypto` implementation code from the
-upstream str0m repository. The release line starts at `0.1.0` and is maintained
-in the
-[pathscale/ps-str0m](https://github.com/pathscale/ps-str0m) repository. The
-provider package is intentionally independent of the repository workspace: its
-release manifest uses caret-versioned published dependencies and contains no
-git or path dependency.
+upstream str0m repository. The current release is `0.2.0`, maintained in the
+[pathscale/ps-str0m](https://github.com/pathscale/ps-str0m) repository. Workspace
+dependencies use local paths and caret versions; Cargo replaces those paths
+with registry dependencies when packaging for publication.
 
 ## Architecture and selected graph
 
@@ -22,24 +20,19 @@ queues, lifecycle, and shutdown.
 
 Certificate generation is local to this package. It creates an ephemeral P-256
 self-signed certificate with `p256` and `x509-cert` and returns the DER
-certificate and PKCS#8 private key required by dimpl. This removes the old
-`dimpl/rcgen` feature edge from this provider. The selected graph is:
+certificate and PKCS#8 private key required by dimpl. The selected graph is:
 
 ```text
-ps-str0m-rust-crypto 0.1.x
-├── str0m-proto ^0.7.0 (dtls)
-├── dimpl ^0.7.4 (rust-crypto, default-features = false)
+ps-str0m-rust-crypto 0.2.0
+├── ps-str0m-proto ^0.8.0 (dtls)
+├── ps-dimpl ^0.8.0 (rust-crypto, default-features = false)
 ├── p256 ^0.13
 ├── x509-cert ^0.2 (builder)
-└── RustCrypto AES, CTR, HMAC, SHA-1, and SHA-2 crates
+└── RustCrypto ChaCha20-Poly1305, HKDF, HMAC, SHA-1, and SHA-2 crates
 ```
 
-The selected profile does not enable dimpl's `rcgen` or `aws-lc-rs` features.
-It must not pull `aws-lc-sys`, `ring`, OpenSSL, a C/C++ build, or an
-unapproved native crypto edge. The `ps-str0m` root package retains upstream
-optional native backends for explicit compatibility choices; they are excluded
-from the Rust-only default profile and this package makes no all-features
-purity claim.
+The provider and the root package use only pure-Rust crypto. ChaCha20-Poly1305
+is the only SRTP profile, and session keys and salts use HKDF-SHA256.
 
 ## Usage
 
@@ -47,8 +40,8 @@ Use the provider directly with a str0m `Rtc` instance:
 
 ```toml
 [dependencies]
-ps-str0m-rust-crypto = "0.1"
-str0m = { version = "0.24", default-features = false }
+ps-str0m-rust-crypto = "^0.2"
+str0m = { package = "ps-str0m", version = "^0.25", default-features = false }
 ```
 
 ```rust
@@ -64,8 +57,7 @@ let rtc = Rtc::builder()
 ```
 
 The `ps-str0m` root package also exposes this provider through its
-`rust-crypto` feature. Applications using that profile must disable default
-features explicitly when they need a Rust-only graph.
+`rust-crypto` feature, which is enabled by default.
 
 ## License and provenance
 
@@ -79,55 +71,23 @@ was reviewed against upstream str0m commit
 [pathscale/ps-str0m fork](https://github.com/pathscale/ps-str0m). No unrelated
 third-party source is vendored into this package. Dependency license and source
 provenance come from the published crate manifests for
-[str0m-proto](https://crates.io/crates/str0m-proto),
-[dimpl](https://crates.io/crates/dimpl),
+[ps-str0m-proto](https://crates.io/crates/ps-str0m-proto),
+[ps-dimpl](https://crates.io/crates/ps-dimpl),
 [p256](https://crates.io/crates/p256),
 [x509-cert](https://crates.io/crates/x509-cert),
-[aes-gcm](https://crates.io/crates/aes-gcm),
-[aes](https://crates.io/crates/aes),
-[ctr](https://crates.io/crates/ctr),
+[chacha20poly1305](https://crates.io/crates/chacha20poly1305),
+[hkdf](https://crates.io/crates/hkdf),
 [hmac](https://crates.io/crates/hmac),
 [sha1](https://crates.io/crates/sha1), and
 [sha2](https://crates.io/crates/sha2). The release review records the exact
 resolved graph separately; this README does not treat crate names or feature
 labels as proof of implementation purity.
 
-## Acceptance status
+## Provider example
 
-The executable `examples/provider-probe.rs` was run against the current source
-tree and passed these provider-level checks:
+The existing `examples/provider-probe.rs` checks certificate DER, the matching
+P-256 private key, the certificate self-signature, the SHA-256 fingerprint, and
+ChaCha20-Poly1305 encryption, decryption, and rejection of an altered tag.
+These provider operations do not establish a negotiated two-peer media session.
 
-- parse the returned certificate as DER X.509;
-- match the returned PKCS#8 private key to the certificate's P-256 SPKI;
-- verify the certificate self-signature over its TBS certificate;
-- match the provider SHA-256 result to SHA-256 over the certificate DER; and
-- encrypt/decrypt an AES-128-GCM SRTP payload and reject a modified tag.
-
-The packaged leaf verification against published `str0m-proto 0.7.0`, clippy,
-and formatting also passed. A source-only cleanup removed five unused trait
-imports from the probe after that run; rerunning the probe after the cleanup is
-still a release check. The root harness separately recorded nine direct DTLS
-handshake cases and two SRTP replay-rejection cases.
-
-These checks do not establish DTLS retransmission/close behavior for the leaf,
-a negotiated two-peer SRTP loopback with counters, or a Chuzz media endpoint.
-
-## Required acceptance
-
-Publishing or using this provider as the Chuzz default still requires all of
-the following evidence against the exact release source:
-
-1. Normal and build dependency graphs for the selected feature set contain no
-   `aws-lc-rs`, `aws-lc-sys`, `ring`, OpenSSL, C/C++ build, or unapproved
-   native edge. Optional native backends in the root workspace remain explicit
-   exclusions rather than an all-features purity claim.
-2. A real DTLS peer verifies the certificate fingerprint and completes the
-   handshake, including retransmission and close paths.
-3. A two-peer SRTP loopback encrypts and decrypts negotiated media, increments
-   send/receive counters, and rejects altered authentication data.
-4. A `ps-str0m` Rust-only configuration using
-   `default-features = false, features = ["rust-crypto"]` completes the same
-   DTLS/SRTP loopback without selecting an alternate provider.
-
-Until those checks pass, this package is a release candidate and the root
-project must not describe it as a verified WebRTC or Chuzz media endpoint.
+See [the release procedure](../../docs/RELEASE.md) for the publication order.

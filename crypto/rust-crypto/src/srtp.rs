@@ -1,4 +1,4 @@
-//! SRTP cipher implementations using RustCrypto: ChaCha20-Poly1305 only, no AES.
+//! SRTP cipher implementations using RustCrypto: ChaCha20-Poly1305 only.
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce, Tag};

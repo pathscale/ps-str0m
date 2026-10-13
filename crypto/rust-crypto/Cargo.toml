@@ -2,7 +2,7 @@
 name = "ps-str0m-rust-crypto"
 version = "0.2.0"
 authors = ["Martin Algesten <martin@algesten.se>"]
-description = "Pure RustCrypto DTLS and SRTP provider for ps-str0m: ChaCha20-Poly1305 only, no AES"
+description = "Pure RustCrypto DTLS and SRTP provider for ps-str0m: ChaCha20-Poly1305 only"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pathscale/ps-str0m"
 readme = "README.md"

@@ -687,9 +687,8 @@ impl StreamTx {
                     body_out[..body_len].copy_from_slice(pkt.payload.as_ref());
                 }
 
-                // media packets are sent unpadded: the SRTP ciphers handle
-                // arbitrary body lengths (the CTR scratch alignment is internal
-                // to protect_rtp), and RTP-level padding breaks SFUs that
+                // media packets are sent unpadded: ChaCha20-Poly1305 handles
+                // arbitrary body lengths, and RTP-level padding breaks SFUs that
                 // re-marshal forwarded packets without it while keeping the P
                 // bit (observed with LiveKit -> Chrome, str0m issue #1014)
                 body_len + original_seq_len
