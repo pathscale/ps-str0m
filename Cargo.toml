@@ -27,12 +27,10 @@ exclude = ["crates/fuzz"]
 
 [workspace.dependencies]
 # Internal crates
-str0m = { package = "ps-str0m", version = "0.25.0", path = ".", default-features = false }
-str0m-proto = { package = "ps-str0m-proto", version = "0.8.0", path = "crates/proto", default-features = false }
-is = { version = "0.11.1", path = "crates/is", default-features = false }
-str0m-netem = { version = "0.4.0", path = "crates/netem" }
-str0m-rust-crypto = { package = "ps-str0m-rust-crypto", version = "0.2.0", path = "crypto/rust-crypto" }
-_str0m_test = { path = "crates/_str0m_test" }
+str0m = { package = "ps-str0m", version = "^0.25.0", path = ".", default-features = false }
+str0m-proto = { package = "ps-str0m-proto", version = "^0.8.0", path = "crates/proto", default-features = false }
+is = { package = "ps-str0m-is", version = "^0.11.1", path = "crates/is", default-features = false }
+str0m-rust-crypto = { package = "ps-str0m-rust-crypto", version = "^0.2.0", path = "crypto/rust-crypto" }
 
 # Core dependencies
 tracing = "0.1.37"
@@ -42,7 +40,7 @@ combine = "4.6.6"
 subtle = "2.0.0"
 arrayvec = "0.7.6"
 serde = { version = "1.0.152", features = ["derive"] }
-dimpl = { package = "ps-dimpl", version = "0.8.0", default-features = false }
+dimpl = { package = "ps-dimpl", version = "^0.8.0", default-features = false }
 drv = { version = "0.4.3" }
 time = "0.3"
 base64ct = "1"
@@ -137,8 +135,8 @@ pcap-file.workspace = true
 regex.workspace = true
 rand.workspace = true
 
-# Package rename not supported with workspace inheritance
-netem = { package = "str0m-netem", version = "0.4.0", path = "crates/netem" }
+# Unpublished development helpers: Cargo omits path-only dev dependencies when packaging.
+netem = { package = "ps-str0m-netem", path = "crates/netem" }
 
 # dummy package that enables "_internal_test_exports"
 _str0m_test = { path = "crates/_str0m_test" }

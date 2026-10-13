@@ -11,6 +11,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 
 [dependencies.str0m]
+package = "ps-str0m"
+version = "^0.25.0"
 path = "../.."
 features = ["_internal_test_exports"]
 

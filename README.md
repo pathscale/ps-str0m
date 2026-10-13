@@ -1,4 +1,14 @@
-# str0m
+# ps-str0m
+
+The fork is published as `ps-str0m`; the library import remains `str0m`:
+
+```toml
+[dependencies]
+str0m = { package = "ps-str0m", version = "^0.25" }
+```
+
+The default provider uses pure-Rust ChaCha20-Poly1305 for DTLS and SRTP.
+See [the release procedure](docs/RELEASE.md) for the fork package graph.
 
 <image src="https://user-images.githubusercontent.com/227204/226143511-66fe5264-6ab7-47b9-9551-90ba7e155b96.svg" alt="str0m logo" ></image>
 

@@ -1,4 +1,11 @@
-# is
+# ps-str0m-is
+
+The fork package is `ps-str0m-is`; its library import remains `is`:
+
+```toml
+[dependencies]
+is = { package = "ps-str0m-is", version = "^0.11.1" }
+```
 
 ## is -- ICE in Sans-IO style
 
@@ -89,8 +96,8 @@ For the full rationale and list of assumptions see the
 | `pii`   | no      | Redacts IP addresses and other PII from log output |
 
 [rfc8445]: https://datatracker.ietf.org/doc/html/rfc8445
-[str0m]: https://crates.io/crates/str0m
+[str0m]: https://crates.io/crates/ps-str0m
 [sansio]: https://sans-io.readthedocs.io/
-[design]: https://github.com/algesten/str0m/blob/main/docs/ice.md
+[design]: https://github.com/pathscale/ps-str0m/blob/main/docs/ice.md
 
 License: MIT OR Apache-2.0

@@ -1,15 +1,19 @@
 [package]
-name = "str0m-netem"
+name = "ps-str0m-netem"
 version = "0.4.0"
 authors = ["Martin Algesten <martin@algesten.se>"]
 description = "Sans-IO network emulation for testing str0m under simulated network conditions"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/algesten/str0m"
+repository = "https://github.com/pathscale/ps-str0m"
 readme = "README.md"
 edition = "2024"
+publish = false
 
 # MSRV
 rust-version = "1.85.0"
+
+[lib]
+name = "str0m_netem"
 
 [dependencies]
 fastrand.workspace = true

@@ -1,4 +1,4 @@
-# str0m-proto
+# ps-str0m-proto
 
-Internal crate for [str0m](https://github.com/algesten/str0m). Not intended for direct use.
-
+Internal crate for [ps-str0m](https://github.com/pathscale/ps-str0m). Not intended for direct use.
+The Rust library name remains `str0m_proto`.
