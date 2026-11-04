@@ -3,13 +3,6 @@ name: Publish
 # Version bumps on main release the fork crates. Existing registry versions
 # are skipped, so manifest-only edits and partial-release retries are safe.
 on:
-  push:
-    branches: [main]
-    paths:
-      - Cargo.toml
-      - crates/proto/Cargo.toml
-      - crates/is/Cargo.toml
-      - crypto/rust-crypto/Cargo.toml
   workflow_dispatch:
 
 concurrency:

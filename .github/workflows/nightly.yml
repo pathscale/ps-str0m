@@ -1,10 +1,6 @@
 name: Nightly
 
 on:
-  schedule:
-    # Run nightly at 2:00 AM UTC
-    - cron: "0 2 * * *"
-  # Allow manual trigger for testing
   workflow_dispatch:
 
 concurrency:
