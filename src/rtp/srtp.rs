@@ -293,10 +293,23 @@ impl SrtpContext {
 }
 
 /// Master key and salt for one direction, from the DTLS-SRTP keying material.
-#[derive(Debug)]
 struct SrtpKey {
     master: [u8; AeadChacha20Poly1305::KEY_LEN],
     salt: [u8; AeadChacha20Poly1305::SALT_LEN],
+}
+
+impl fmt::Debug for SrtpKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SrtpKey").finish_non_exhaustive()
+    }
+}
+
+impl Drop for SrtpKey {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.master.zeroize();
+        self.salt.zeroize();
+    }
 }
 
 impl SrtpKey {
