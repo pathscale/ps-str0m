@@ -9,7 +9,7 @@ readme = "README.md"
 keywords = ["webrtc", "streaming", "video", "audio", "media"]
 categories = ["web-programming", "multimedia", "network-programming"]
 edition = "2024"
-exclude = ["/cargo_deny.sh", "/deny.toml", "/run-fuzz.sh", "/cert.pem", "/examples/key.pem", "/examples/cer.pem"]
+exclude = ["/cargo_deny.sh", "/deny.toml", "/run-fuzz.sh", "/cert.pem", "/examples/key.pem", "/examples/cer.pem", "/ssl-req.conf"]
 
 # MSRV
 rust-version = "1.85.0"
