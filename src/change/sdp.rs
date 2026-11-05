@@ -1730,8 +1730,12 @@ impl Changes {
             ));
         }
 
+        let mut seen = std::collections::HashSet::new();
         'next: for (_, l) in lines {
             let mid = l.mid();
+            if !seen.insert(mid) {
+                return Some("Duplicate answer mid".into());
+            }
 
             for m in &self.0 {
                 use Change::*;
