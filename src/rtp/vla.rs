@@ -162,10 +162,16 @@ impl VideoLayersAllocation {
                     split_at(next_resolution_and_framerate, 5)?;
                 next_resolution_and_framerate = after_resolution_and_framerate;
                 Some(ResolutionAndFramerate {
-                    width: u16::from_be_bytes(resolution_and_framerate[0..2].try_into().unwrap())
-                        + 1,
-                    height: u16::from_be_bytes(resolution_and_framerate[2..4].try_into().unwrap())
-                        + 1,
+                    width: u16::from_be_bytes([
+                        resolution_and_framerate[0],
+                        resolution_and_framerate[1],
+                    ])
+                    .checked_add(1)?,
+                    height: u16::from_be_bytes([
+                        resolution_and_framerate[2],
+                        resolution_and_framerate[3],
+                    ])
+                    .checked_add(1)?,
                     framerate: resolution_and_framerate[4],
                 })
             });
