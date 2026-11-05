@@ -53,6 +53,7 @@ impl SrtpContext {
                     rtp,
                     rtcp,
                     srtcp_index: 0,
+                    rtcp_replay: std::collections::BTreeMap::new(),
                     rx_scratch: Vec::with_capacity(RX_SCRATCH_CAPACITY),
                 }
             }
@@ -69,6 +70,7 @@ pub struct SrtpContext {
     rtcp: Derived,
     /// Counter for outgoing SRTCP packets.
     srtcp_index: u32,
+    rtcp_replay: std::collections::BTreeMap<u32, (u32, u64)>,
     /// Reusable scratch buffer for RTP decryption output. Reused across calls
     /// to `unprotect_rtp` so we don't allocate a fresh `Vec` per packet.
     rx_scratch: Vec<u8>,
@@ -223,6 +225,26 @@ impl SrtpContext {
         // The SRTCP index is a 31-bit counter for the SRTCP packet.
         let srtcp_index = e_and_si & 0x7fff_ffff;
         let ssrc = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
+        let replay = if let Some(&(highest, bits)) = self.rtcp_replay.get(&ssrc) {
+            if srtcp_index > highest {
+                let shift = srtcp_index - highest;
+                (
+                    srtcp_index,
+                    if shift >= 64 { 1 } else { (bits << shift) | 1 },
+                )
+            } else {
+                let shift = highest - srtcp_index;
+                if shift >= 64 || bits & (1u64 << shift) != 0 {
+                    return None;
+                }
+                (highest, bits | (1u64 << shift))
+            }
+        } else {
+            if self.rtcp_replay.len() >= 64 {
+                return None;
+            }
+            (srtcp_index, 1)
+        };
 
         let Derived { salt, dec, .. } = &mut self.rtcp;
         let iv = AeadChacha20Poly1305::rtcp_iv(*salt, ssrc, srtcp_index);
@@ -265,6 +287,7 @@ impl SrtpContext {
             )
         }
 
+        self.rtcp_replay.insert(ssrc, replay);
         Some(output)
     }
 }
