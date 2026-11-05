@@ -235,12 +235,21 @@ impl IceConnectionState {
 /// Credentials for STUN packages.
 ///
 /// By matching IceCreds in STUN to SDP, we know which STUN belongs to which Peer.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct IceCreds {
     /// From a=ice-ufrag
     pub ufrag: String,
     /// From a=ice-pwd
     pub pass: String,
+}
+
+impl std::fmt::Debug for IceCreds {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IceCreds")
+            .field("ufrag", &self.ufrag)
+            .field("pass", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
