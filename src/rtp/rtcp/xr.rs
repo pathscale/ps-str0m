@@ -254,30 +254,31 @@ impl<'a> TryFrom<&'a [u8]> for Dlrr {
             return Err("Less than 4 bytes for Dlrr");
         }
 
-        let words_per_block = 3;
-        let blocks = u16::from_be_bytes(buf[2..4].try_into().unwrap()) / words_per_block;
+        let length_words = usize::from(u16::from_be_bytes([buf[2], buf[3]]));
+        if length_words % 3 != 0 {
+            return Err("DLRR length is not a whole number of sub-blocks");
+        }
+        let payload_len = length_words
+            .checked_mul(4)
+            .ok_or("DLRR length overflows address space")?;
+        let end = 4usize
+            .checked_add(payload_len)
+            .ok_or("DLRR length overflows address space")?;
+        if end > buf.len() {
+            return Err("Truncated DLRR sub-block");
+        }
 
-        let mut items: Vec<DlrrItem> = Vec::with_capacity(blocks as usize);
-
-        // move on after the header
-        let mut buf = &buf[4..];
-
-        for _ in 0..blocks {
-            // Each DLRR item is 12 bytes. The block count comes from the
-            // (attacker-controlled) length field, so stop if there aren't
-            // enough bytes left for another item.
-            if buf.len() < 12 {
-                break;
-            }
-            let ssrc = u32::from_be_bytes(buf[0..4].try_into().unwrap()).into();
-            let last_rr_time = u32::from_be_bytes(buf[4..8].try_into().unwrap());
-            let last_rr_delay = u32::from_be_bytes(buf[8..12].try_into().unwrap());
+        let blocks = length_words / 3;
+        let mut items: Vec<DlrrItem> = Vec::with_capacity(blocks);
+        for item in buf[4..end].chunks_exact(12) {
+            let ssrc = u32::from_be_bytes([item[0], item[1], item[2], item[3]]).into();
+            let last_rr_time = u32::from_be_bytes([item[4], item[5], item[6], item[7]]);
+            let last_rr_delay = u32::from_be_bytes([item[8], item[9], item[10], item[11]]);
             items.push(DlrrItem {
                 ssrc,
                 last_rr_time,
                 last_rr_delay,
             });
-            buf = &buf[12..];
         }
 
         Ok(Dlrr { items })
