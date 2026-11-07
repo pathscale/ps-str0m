@@ -774,14 +774,14 @@ impl PacketChunk {
             //    symbol list:  14 bits A list of packet status symbols, 7 or 14 in
             //                total.
             PacketChunk::VectorSingle(n, fill) => {
-                assert!(*fill == 14);
+                assert!(*fill <= 14);
                 let mut x: u16 = 1 << 15;
                 assert!(*n <= 16384);
                 x |= *n;
                 x
             }
             PacketChunk::VectorDouble(n, fill) => {
-                assert!(*fill == 7);
+                assert!(*fill <= 7);
                 let mut x: u16 = 1 << 15;
                 assert!(*n <= 16384);
                 x |= 1 << 14;
@@ -795,8 +795,9 @@ impl PacketChunk {
     fn max_possible_status_count(&self) -> usize {
         match self {
             PacketChunk::Run(_, n) => *n as usize,
-            PacketChunk::VectorSingle(_, _) => 14,
-            PacketChunk::VectorDouble(_, _) => 7,
+            PacketChunk::VectorSingle(_, filled) | PacketChunk::VectorDouble(_, filled) => {
+                *filled as usize
+            }
         }
     }
 
@@ -888,17 +889,25 @@ impl<'a> TryFrom<&'a [u8]> for Twcc {
             delta: VecDeque::new(),
         };
 
-        let mut todo = status_count as isize;
+        let mut statuses_left = status_count as usize;
         let mut buf = &buf[16..];
-        loop {
-            if todo <= 0 {
-                break;
+        while statuses_left > 0 {
+            let mut chunk: PacketChunk = buf.try_into()?;
+            match &mut chunk {
+                PacketChunk::Run(_, count) => {
+                    if *count == 0 {
+                        return Err("Zero-length TWCC run");
+                    }
+                    *count = (*count as usize).min(statuses_left) as u16;
+                }
+                PacketChunk::VectorSingle(_, count) => {
+                    *count = statuses_left.min(14) as u16;
+                }
+                PacketChunk::VectorDouble(_, count) => {
+                    *count = statuses_left.min(7) as u16;
+                }
             }
-
-            let chunk: PacketChunk = buf.try_into()?;
-
-            todo -= chunk.max_possible_status_count() as isize;
-
+            statuses_left -= chunk.max_possible_status_count();
             twcc.chunks.push_back(chunk);
             buf = &buf[2..];
         }
@@ -929,27 +938,31 @@ impl<'a> TryFrom<&'a [u8]> for Twcc {
                 .map(|i| Delta::Large(i16::from_be_bytes([buf[i], buf[i + 1]]))))
         }
 
-        for c in &twcc.chunks {
-            match c {
-                PacketChunk::Run(PacketStatus::ReceivedSmallDelta, n) => {
-                    let n = *n as usize;
-                    twcc.delta.extend(read_delta_small(buf, n)?);
-                    buf = &buf[n..];
+        for chunk in &twcc.chunks {
+            match *chunk {
+                PacketChunk::Run(PacketStatus::ReceivedSmallDelta, count) => {
+                    let count = count as usize;
+                    twcc.delta.extend(read_delta_small(buf, count)?);
+                    buf = &buf[count..];
                 }
-                PacketChunk::Run(PacketStatus::ReceivedLargeOrNegativeDelta, n) => {
-                    let n = *n as usize;
-                    twcc.delta.extend(read_delta_large(buf, n)?);
-                    buf = &buf[n..];
+                PacketChunk::Run(PacketStatus::ReceivedLargeOrNegativeDelta, count) => {
+                    let count = count as usize;
+                    twcc.delta.extend(read_delta_large(buf, count)?);
+                    buf = &buf[count * 2..];
                 }
-                PacketChunk::VectorSingle(v, _) => {
-                    let n = v.count_ones() as usize;
-                    twcc.delta.extend(read_delta_small(buf, n)?);
-                    buf = &buf[n..];
+                PacketChunk::VectorSingle(bits, count) => {
+                    for index in 0..count as usize {
+                        if bits & (1 << (13 - index)) != 0 {
+                            twcc.delta.extend(read_delta_small(buf, 1)?);
+                            buf = &buf[1..];
+                        }
+                    }
                 }
-                PacketChunk::VectorDouble(v, _) => {
-                    for n in (0..=12).step_by(2) {
-                        let x = (*v >> (12 - n)) & 0b11;
-                        match PacketStatus::from(x as u8) {
+                PacketChunk::VectorDouble(bits, count) => {
+                    for index in 0..count as usize {
+                        let shift = 12 - index * 2;
+                        let status = PacketStatus::from(((bits >> shift) & 0b11) as u8);
+                        match status {
                             PacketStatus::ReceivedSmallDelta => {
                                 twcc.delta.extend(read_delta_small(buf, 1)?);
                                 buf = &buf[1..];
@@ -962,7 +975,7 @@ impl<'a> TryFrom<&'a [u8]> for Twcc {
                         }
                     }
                 }
-                _ => {}
+                PacketChunk::Run(_, _) => {}
             }
         }
 

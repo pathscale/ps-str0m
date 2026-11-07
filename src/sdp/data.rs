@@ -101,29 +101,38 @@ impl Sdp {
         //    for PT 96 in one m-line it must be in all m-lines.
         // 2. Compare with previous m-lines that remote isn't narrowing/expanding PT and/or extmaps.
 
-        let group = self
+        if !self
             .session
             .attrs
             .iter()
-            .find(|a| matches!(a, SessionAttribute::Group { .. }));
+            .any(|a| matches!(a, SessionAttribute::Group { .. }))
+        {
+            return Some("Session attribute a=group missing".into());
+        }
 
-        if let Some(SessionAttribute::Group { mids, .. }) = group {
-            if !mids.len() == self.media_lines.len() {
+        if let Some(mids) = self.bundle_mids() {
+            if mids.len() != self.media_lines.len() {
                 return Some(format!(
-                    "a=group mid count doesn't match m-line count {} != {}",
+                    "a=group:BUNDLE mid count doesn't match m-line count {} != {}",
                     mids.len(),
                     self.media_lines.len()
                 ));
+            }
+            let mut seen = HashSet::new();
+            if mids.iter().any(|mid| !seen.insert(*mid)) {
+                return Some("Duplicate BUNDLE mid".into());
             }
             for (media, mid) in self.media_lines.iter().zip(mids.iter()) {
                 media.check_consistent()?;
                 let m = media.mid();
                 if m != *mid {
-                    return Some(format!("Mid order not matching a=group {m} != {mid}"));
+                    return Some(format!("Mid order not matching a=group:BUNDLE {m} != {mid}"));
                 }
             }
         } else {
-            return Some("Session attribute a=group missing".into());
+            for media in &self.media_lines {
+                media.check_consistent()?;
+            }
         }
 
         None
