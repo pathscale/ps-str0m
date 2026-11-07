@@ -41,34 +41,24 @@ helper. Both are path-only root dev dependencies so Cargo omits them from the
 published manifest. `str0m-fuzz 0.0.0` is excluded from the workspace and has
 `publish = false`. None of these packages belongs in the publish order.
 
-## Automated publication
+## Manual publication
 
-`.github/workflows/publish.yml` follows the house convention: production
-manifest changes on `main` trigger publication on `ubicloud-standard-2`.
-Manual dispatch on `main` can bootstrap or resume the release. Configure the
-repository secret `CARGO_REGISTRY_TOKEN` with permission to publish all four
-production package names.
+Bump the affected package versions and update the workspace dependency ranges
+as needed. Check that any new external dependency versions are on crates.io.
+Verify the release source locally, review the package names and dependency
+ranges, and rebase-merge the reviewed change onto `master`.
 
-The workflow runs the four package steps in the order above. Each step checks
-the manifest's version on crates.io once. An existing, non-yanked version is
-skipped; a missing version is published with ordinary `cargo publish -p`,
-including Cargo's package verification. Registry lookup errors, yanked
-versions, and publish failures stop the job. Later version bumps therefore
-publish only missing versions, and a partially completed release can resume.
+In GitHub Actions, manually run the **Publish** workflow from `master`. Select
+the checkbox for each package you intend to publish. All four inputs default
+to false, so an empty selection publishes nothing. The workflow uses the
+repository's `CARGO_REGISTRY_TOKEN` for crates.io.
 
-For a release, bump the affected package versions and the workspace dependency
-ranges together, then merge onto `main`. Ensure any new external dependency
-versions are already published. Publication is irreversible, so review the
-package names, dependency ranges, and release source before merging.
-
-The equivalent first-publication order is:
-
-```text
-cargo publish -p ps-str0m-proto
-cargo publish -p ps-str0m-is
-cargo publish -p ps-str0m-rust-crypto
-cargo publish -p ps-str0m
-```
+The workflow publishes selected packages in the order above. It calls
+`cargo publish --registry crates-io --manifest-path` for each selected
+manifest. Cargo uses the version in that manifest, verifies the package, and
+rejects versions already published. To resume a partial release, wait until
+the required dependency versions are indexed on crates.io, then dispatch the
+workflow again with only the still-unpublished package versions selected.
 
 Once the four versions are indexed, downstream workspaces can remove their
 `ps-str0m` and `ps-str0m-rust-crypto` path patches. Published `ps-dimpl 0.8.0`
