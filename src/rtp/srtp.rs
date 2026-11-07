@@ -5,6 +5,7 @@ use crate::crypto::dtls::{KeyingMaterial, SrtpProfile};
 use crate::crypto::{AeadChacha20Poly1305, AeadChacha20Poly1305Cipher};
 use crate::crypto::{CryptoProvider, SrtpProvider};
 use crate::io::DATAGRAM_MAX_PACKET_SIZE;
+use crate::RtcError;
 
 use super::header::RtpHeader;
 
@@ -28,6 +29,7 @@ const KDF_INFO: &[u8] = b"ps-str0m SRTP ChaCha20-Poly1305 KDF";
 
 pub const SRTP_BLOCK_SIZE: usize = 16;
 const SRTCP_INDEX_LEN: usize = 4;
+const SRTCP_INDEX_LIMIT: u32 = 1 << 31;
 const SRTCP_HEADER_LEN: usize = 8;
 const MAX_TAG_LEN: usize = AeadChacha20Poly1305::TAG_LEN;
 pub const SRTCP_OVERHEAD: usize = MAX_TAG_LEN + SRTCP_INDEX_LEN;
@@ -145,16 +147,20 @@ impl SrtpContext {
         Some(&self.rx_scratch[..out_len])
     }
 
-    pub fn protect_rtcp(&mut self, buf: &[u8]) -> Vec<u8> {
+    pub(crate) fn srtcp_index_exhausted(&self) -> bool {
+        self.srtcp_index >= SRTCP_INDEX_LIMIT
+    }
+
+    pub fn protect_rtcp(&mut self, buf: &[u8]) -> Result<Vec<u8>, RtcError> {
+        if self.srtcp_index_exhausted() {
+            return Err(RtcError::SrtcpIndexExhausted);
+        }
+
         let srtcp_index = self.srtcp_index;
+        // Keep the exhausted value so this key and salt never reuse an index.
+        self.srtcp_index += 1;
 
-        // https://tools.ietf.org/html/rfc3711#page-15
-        // The SRTCP index MUST be set to zero before the first SRTCP
-        // packet is sent, and MUST be incremented by one,
-        // modulo 2^31, after each SRTCP packet is sent.
-        self.srtcp_index = (self.srtcp_index + 1) % 2_u32.pow(31);
-
-        // e is always encrypted, rest is 31 byte index.
+        // The encryption flag occupies the high bit above the 31-bit index.
         let e_and_si = 0x8000_0000 | srtcp_index;
         let ssrc = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
 
@@ -182,7 +188,7 @@ impl SrtpContext {
         let to = &mut output[enc_end..];
         to[0..4].copy_from_slice(&e_and_si.to_be_bytes());
 
-        output
+        Ok(output)
     }
 
     // SRTCP layout
@@ -398,4 +404,43 @@ fn error_details(header: &RtpHeader, srtp_index: u64) -> String {
         header.ext_vals.rid_repair,
         srtp_index
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SRTCP_INDEX_LIMIT, SrtpContext};
+    use crate::crypto::{
+        dtls::{KeyingMaterial, SrtpProfile},
+        test_default_provider,
+    };
+    use crate::RtcError;
+
+    #[test]
+    fn final_srtcp_index_is_sent_once_without_wrapping() {
+        let profile = SrtpProfile::CHACHA20_POLY1305;
+        let material_bytes = vec![0x42; profile.keying_material_len()];
+        let material = KeyingMaterial::new(&material_bytes);
+        let crypto = test_default_provider();
+        let mut tx = SrtpContext::new(crypto, profile, &material, true);
+        let mut rx = SrtpContext::new(crypto, profile, &material, true);
+        let rtcp = [0x80, 201, 0, 1, 0x12, 0x34, 0x56, 0x78];
+
+        tx.srtcp_index = SRTCP_INDEX_LIMIT - 1;
+        let protected = tx.protect_rtcp(&rtcp).expect("final legal SRTCP index");
+
+        let trailer = u32::from_be_bytes(
+            protected[protected.len() - 4..]
+                .try_into()
+                .expect("four-byte SRTCP index"),
+        );
+        assert_eq!(trailer, u32::MAX);
+        assert_eq!(rx.unprotect_rtcp(&protected).as_deref(), Some(rtcp.as_slice()));
+        assert_eq!(tx.srtcp_index, SRTCP_INDEX_LIMIT);
+
+        assert!(matches!(
+            tx.protect_rtcp(&rtcp),
+            Err(RtcError::SrtcpIndexExhausted)
+        ));
+        assert_eq!(tx.srtcp_index, SRTCP_INDEX_LIMIT);
+    }
 }
