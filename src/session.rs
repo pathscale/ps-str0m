@@ -1059,17 +1059,17 @@ impl Session {
         self.srtp_rx.is_some() && self.srtp_tx.is_some()
     }
 
-    pub fn poll_datagram(&mut self, now: Instant) -> Option<net::DatagramSend> {
+    pub fn poll_datagram(&mut self, now: Instant) -> Result<Option<net::DatagramSend>, RtcError> {
         // Time must have progressed forward from start value.
         if now == already_happened() {
-            return None;
+            return Ok(None);
         }
 
+        let feedback = self.poll_feedback()?;
         let x = if self.rtp_closing {
-            self.poll_feedback()
+            feedback
         } else {
-            None.or_else(|| self.poll_feedback())
-                .or_else(|| self.poll_packet(now))
+            feedback.or_else(|| self.poll_packet(now))
         };
 
         if let Some(x) = &x {
@@ -1081,7 +1081,7 @@ impl Session {
             }
         }
 
-        x
+        Ok(x)
     }
 
     /// To be called in lieu of [`Self::poll_datagram`] when the owner is not in a position to transmit any
@@ -1110,9 +1110,18 @@ impl Session {
         self.rtp_closing && self.feedback_tx.is_empty()
     }
 
-    fn poll_feedback(&mut self) -> Option<net::DatagramSend> {
+    fn poll_feedback(&mut self) -> Result<Option<net::DatagramSend>, RtcError> {
         if self.feedback_tx.is_empty() {
-            return None;
+            return Ok(None);
+        }
+
+        // Serialization drains feedback and can emit raw RTCP events.
+        if self
+            .srtp_tx
+            .as_ref()
+            .is_some_and(SrtpContext::srtcp_index_exhausted)
+        {
+            return Err(RtcError::SrtcpIndexExhausted);
         }
 
         // Round to nearest multiple of 4 bytes.
@@ -1131,20 +1140,22 @@ impl Session {
         let len = Rtcp::write_packet(&mut self.feedback_tx, &mut data, output);
 
         if len == 0 {
-            return None;
+            return Ok(None);
         }
 
         data.truncate(len);
 
-        let srtp = self.srtp_tx.as_mut()?;
-        let protected = srtp.protect_rtcp(&data);
+        let Some(srtp) = self.srtp_tx.as_mut() else {
+            return Ok(None);
+        };
+        let protected = srtp.protect_rtcp(&data)?;
 
         assert!(
             protected.len() < self.mtu(),
             "Encrypted SRTCP should be less than MTU"
         );
 
-        Some(protected.into())
+        Ok(Some(protected.into()))
     }
 
     fn poll_packet(&mut self, now: Instant) -> Option<DatagramSend> {

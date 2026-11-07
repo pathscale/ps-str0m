@@ -1803,9 +1803,16 @@ impl Rtc {
 
         if let Some(send) = &self.send_addr {
             // These can only be sent after we got an ICE connection.
-            let datagram = None
-                .or_else(|| self.dtls.poll_packet())
-                .or_else(|| self.session.poll_datagram(self.last_now));
+            let datagram = match self.dtls.poll_packet() {
+                Some(datagram) => Some(datagram),
+                None => match self.session.poll_datagram(self.last_now) {
+                    Ok(datagram) => datagram,
+                    Err(error) => {
+                        self.disconnect();
+                        return Err(error);
+                    }
+                },
+            };
 
             if let Some(contents) = datagram {
                 let t = net::Transmit {

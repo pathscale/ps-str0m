@@ -81,6 +81,9 @@ pub enum RtcError {
     /// 4. The we used the [`crate::change::SdpPendingOffer`] created in step 1.
     ChangesOutOfOrder,
 
+    /// The outgoing SRTCP index is exhausted. Establish a fresh session.
+    SrtcpIndexExhausted,
+
     /// The [`crate::media::Writer`] was used twice without doing [`crate::Rtc::poll_output`] in between. This
     /// is an incorrect usage pattern of the str0m API.
     WriteWithoutPoll,
@@ -114,6 +117,9 @@ impl fmt::Display for RtcError {
             RtcError::Ice(err) => write!(f, "{}", err),
             RtcError::Sctp(err) => write!(f, "{}", err),
             RtcError::ChangesOutOfOrder => write!(f, "Changes made out of order"),
+            RtcError::SrtcpIndexExhausted => {
+                write!(f, "SRTCP send index exhausted. Establish a fresh session")
+            }
             RtcError::WriteWithoutPoll => write!(
                 f,
                 "Consecutive calls to write() without poll_output() in between"
