@@ -98,7 +98,10 @@
 extern crate tracing;
 
 mod agent;
-pub use agent::{IceAgent, IceAgentEvent, IceConnectionState, IceCreds, LocalPreference};
+pub use agent::{
+    IceAgent, IceAgentEvent, IceCandidateCapacity, IceCandidateOverflow, IceConnectionState,
+    IceCreds, LocalPreference,
+};
 
 mod candidate;
 pub use candidate::{Candidate, CandidateBuilder, CandidateKind};

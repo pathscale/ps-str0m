@@ -21,7 +21,7 @@ use crate::sctp::RtcSctp;
 use crate::sdp::{self, MediaAttribute, MediaLine, MediaType, Msid, Sdp};
 use crate::sdp::{Proto, SessionAttribute, Setup, SimulcastGroups};
 use crate::session::Session;
-use crate::{Candidate, IceCreds};
+use crate::{Candidate, IceCandidateCapacity, IceCreds};
 use str0m_proto::Id;
 
 pub use crate::sdp::{SdpAnswer, SdpOffer};
@@ -46,8 +46,8 @@ impl<'a> SdpApi<'a> {
     /// sent to the remote peer.
     ///
     /// <b>Note. Pending changes from a previous non-completed [`SdpApi`][super::SdpApi] will be
-    /// considered rolled back when calling this function.</b> If a remote ICE restart fails
-    /// because local credentials cannot be generated, pending changes remain valid.
+    /// considered rolled back when calling this function.</b> Pending changes remain valid if
+    /// candidate admission exceeds capacity or a remote ICE restart cannot obtain local credentials.
     ///
     /// The incoming SDP is validated in various ways which can cause this call to fail.
     /// Example of such problems would be an SDP without any m-lines, missing `a=fingerprint`
@@ -88,8 +88,11 @@ impl<'a> SdpApi<'a> {
             add_ice_details(self.rtc, &offer, None, new_credentials)
         };
 
-        // Preserve an outstanding offer if we could not begin a remote ICE restart.
-        if !matches!(&ice_result, Err(RtcError::Ice(IceError::Entropy(_)))) {
+        // These failures occur before applying the remote offer's ICE changes.
+        if !matches!(
+            &ice_result,
+            Err(RtcError::Ice(IceError::Entropy(_)) | RtcError::IceCandidateCapacity { .. })
+        ) {
             self.rtc.next_change_id();
         }
         ice_result?;
@@ -150,6 +153,9 @@ impl<'a> SdpApi<'a> {
     /// [`SdpApi`][super::SdpApi] before calling this. The same also happens if we use
     /// [`SdpApi::accept_offer()`] before using this pending instance.
     ///
+    /// If the answer exceeds ICE candidate capacity, [`RtcError::IceCandidateCapacity`] returns
+    /// the pending offer so you can retry with a smaller answer or a higher limit.
+    ///
     /// ```no_run
     /// # use std::time::Instant;
     /// # use str0m::Rtc;
@@ -186,7 +192,12 @@ impl<'a> SdpApi<'a> {
             ));
         }
 
-        add_ice_details(self.rtc, &answer, Some(&pending), IceCreds::new)?;
+        if let Err(mut error) = add_ice_details(self.rtc, &answer, Some(&pending), IceCreds::new) {
+            if let RtcError::IceCandidateCapacity { pending: retry, .. } = &mut error {
+                *retry = Some(pending);
+            }
+            return Err(error);
+        }
 
         // Ensure setup=active/passive is corresponding remote and init dtls.
         init_dtls(self.rtc, &answer)?;
@@ -743,29 +754,36 @@ fn add_ice_details(
         Some(v) => *v != creds,
         None => false,
     };
-    if ice_restart {
-        let (new_local_creds, keep_local_candidates) = if let Some(pending) = pending {
-            // Since we have a pending, this is an answer to our offer.
-            pending.changes.ice_restart().ok_or_else(||
-                // Answer contained changed remote creds, indicating an ice restart
-                // but since we have no pending ice-creds, we didn't initiate it
-                // Ice restart in an ANSWER breaks spec.
-                RtcError::RemoteSdp(
-                    "Ice restart in answer without one in the preceeding offer".into(),
-                ))?
-        } else {
-            // The remote OFFER had an ice restart, and we need to respond with
-            // new credentials in the ANSWER.
-            (new_credentials()?, true)
-        };
+    let pending_restart = match (ice_restart, pending) {
+        (true, Some(pending)) => Some(pending.changes.ice_restart().ok_or_else(|| {
+            RtcError::RemoteSdp("Ice restart in answer without one in the preceeding offer".into())
+        })?),
+        _ => None,
+    };
 
+    let capacity_error = |capacity: IceCandidateCapacity| RtcError::IceCandidateCapacity {
+        capacity,
+        pending: None,
+    };
+    rtc.ice
+        .check_remote_candidate_batch(&creds, ice_restart, sdp.ice_candidates())
+        .map_err(capacity_error)?;
+
+    if ice_restart {
+        let (new_local_creds, keep_local_candidates) = match pending_restart {
+            Some(restart) => restart,
+            // The remote offer initiated the restart. Generate credentials before committing it.
+            None => (new_credentials()?, true),
+        };
         rtc.ice.ice_restart(new_local_creds, keep_local_candidates);
     }
 
     rtc.ice.set_remote_credentials(creds);
 
-    for r in sdp.ice_candidates() {
-        rtc.ice.add_remote_candidate(r.clone());
+    for candidate in sdp.ice_candidates() {
+        rtc.ice
+            .try_add_remote_candidate(candidate.clone())
+            .map_err(capacity_error)?;
     }
 
     Ok(())
@@ -2032,6 +2050,109 @@ mod test {
         let retry = SdpOffer::from_sdp_string(&restart_sdp).unwrap();
         local.sdp_api().accept_offer(retry).unwrap();
         assert_eq!(local.ice.remote_credentials(), Some(&new_remote_creds));
+    }
+
+    #[test]
+    fn candidate_admission_restart_offer_preserves_pending_and_retries() {
+        crate::init_crypto_default();
+
+        let now = Instant::now();
+        let mut local = Rtc::new(now).unwrap();
+        let mut remote = Rtc::new(now).unwrap();
+
+        let mut changes = local.sdp_api();
+        changes.add_media(MediaKind::Audio, Direction::SendRecv, None, None, None);
+        let (offer, pending) = changes.apply().unwrap();
+        let answer = remote.sdp_api().accept_offer(offer).unwrap();
+        local.sdp_api().accept_answer(pending, answer).unwrap();
+
+        let mut changes = local.sdp_api();
+        changes.add_media(MediaKind::Video, Direction::SendRecv, None, None, None);
+        let (offer, pending) = changes.apply().unwrap();
+        let answer = remote.sdp_api().accept_offer(offer).unwrap();
+
+        let previous = Candidate::host("192.0.2.1:5000".parse().unwrap(), "udp").unwrap();
+        assert!(local.try_add_remote_candidate(previous.clone()).unwrap());
+        local.set_ice_candidate_limits(4, 1);
+        for port in 5000..5002 {
+            let addr = format!("198.51.100.1:{port}").parse().unwrap();
+            remote
+                .add_local_candidate(Candidate::host(addr, "udp").unwrap())
+                .unwrap();
+        }
+        let mut restart = remote.sdp_api();
+        let new_remote_creds = restart.ice_restart(true).unwrap();
+        let (restart_offer, _) = restart.apply().unwrap();
+        let restart_sdp = restart_offer.to_sdp_string();
+        let old_local_creds = local.ice.local_credentials().clone();
+        let old_remote_creds = local.ice.remote_credentials().unwrap().clone();
+
+        let error = local
+            .sdp_api()
+            .accept_offer_with(restart_offer, || panic!("capacity must precede entropy"))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            RtcError::IceCandidateCapacity {
+                capacity: IceCandidateCapacity::Remote,
+                pending: None,
+            }
+        ));
+        assert_eq!(local.ice_candidate_overflow().remote, 1);
+        assert_eq!(local.ice.local_credentials(), &old_local_creds);
+        assert_eq!(local.ice.remote_credentials(), Some(&old_remote_creds));
+        assert_eq!(
+            local.ice.remote_candidates().collect::<Vec<_>>(),
+            vec![previous]
+        );
+        local.sdp_api().accept_answer(pending, answer).unwrap();
+
+        local.set_ice_candidate_limits(4, 2);
+        let retry = SdpOffer::from_sdp_string(&restart_sdp).unwrap();
+        local.sdp_api().accept_offer(retry).unwrap();
+        assert_eq!(local.ice.remote_credentials(), Some(&new_remote_creds));
+        assert_eq!(local.ice.remote_candidates().count(), 2);
+        assert_eq!(local.ice_candidate_overflow().remote, 0);
+    }
+
+    #[test]
+    fn candidate_admission_answer_returns_pending_for_retry() {
+        crate::init_crypto_default();
+
+        let now = Instant::now();
+        let mut local = Rtc::new(now).unwrap();
+        let mut remote = Rtc::new(now).unwrap();
+        local.set_ice_candidate_limits(4, 1);
+
+        let mut changes = local.sdp_api();
+        let mid = changes.add_media(MediaKind::Audio, Direction::SendRecv, None, None, None);
+        let (offer, pending) = changes.apply().unwrap();
+        for port in 5000..5002 {
+            let addr = format!("198.51.100.1:{port}").parse().unwrap();
+            remote
+                .add_local_candidate(Candidate::host(addr, "udp").unwrap())
+                .unwrap();
+        }
+        let answer = remote.sdp_api().accept_offer(offer).unwrap();
+        let retry = SdpAnswer::from_sdp_string(&answer.to_sdp_string()).unwrap();
+        let error = local.sdp_api().accept_answer(pending, answer).unwrap_err();
+        let RtcError::IceCandidateCapacity {
+            capacity: IceCandidateCapacity::Remote,
+            pending: Some(pending),
+        } = error
+        else {
+            panic!("expected capacity error with pending offer, got {error:?}");
+        };
+        assert!(local.ice.remote_credentials().is_none());
+        assert_eq!(local.ice.remote_candidates().count(), 0);
+        assert_eq!(local.ice_candidate_overflow().remote, 1);
+        assert!(local.media(mid).is_none());
+
+        local.set_ice_candidate_limits(4, 2);
+        local.sdp_api().accept_answer(pending, retry).unwrap();
+        assert!(local.ice.remote_credentials().is_some());
+        assert_eq!(local.ice.remote_candidates().count(), 2);
+        assert!(local.media(mid).is_some());
     }
 
     #[test]

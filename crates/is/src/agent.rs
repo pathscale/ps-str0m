@@ -48,8 +48,9 @@ pub struct IceAgent {
     // but the value MUST be configurable.
     max_candidate_pairs: Option<usize>,
 
-    /// Whether we have previously exceeded the `max_candidate_pairs` limit.
-    has_exceeded_max_candidate_pairs: bool,
+    max_local_candidates: usize,
+    max_remote_candidates: usize,
+    candidate_overflow: IceCandidateOverflow,
 
     /// Credentials for this side. Set on init and ice-restart.
     local_credentials: IceCreds,
@@ -89,7 +90,7 @@ pub struct IceAgent {
     /// the remote_credentials.
     stun_server_queue: VecDeque<StunRequest>,
 
-    /// Remote addresses we have seen traffic appear from. This is used
+    /// Admitted remote endpoints seen in this ICE generation. This is used
     /// to dedupe [`IceAgentEvent::DiscoveredRecv`].
     discovered_recv: HashSet<(Protocol, SocketAddr)>,
 
@@ -262,6 +263,48 @@ pub struct IceAgentStats {
     pub nomination_send_count: u64,
 }
 
+/// A signaled ICE candidate exceeded its admission limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IceCandidateCapacity {
+    /// The local candidate list is full for signaled candidates.
+    Local,
+    /// The remote candidate list is full for signaled candidates.
+    Remote,
+}
+
+impl fmt::Display for IceCandidateCapacity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Local => f.write_str("ICE local candidate admission limit reached"),
+            Self::Remote => f.write_str("ICE remote candidate admission limit reached"),
+        }
+    }
+}
+
+impl std::error::Error for IceCandidateCapacity {}
+
+/// Capacity refusals and checklist pruning in the current ICE generation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IceCandidateOverflow {
+    /// Local signaling attempts refused for lack of a slot.
+    pub local: u64,
+    /// Remote trickle attempts and SDP batches refused for lack of a slot.
+    pub remote: u64,
+    /// Authenticated responses refused at the local peer-reflexive limit.
+    pub local_peer_reflexive: u64,
+    /// Authenticated requests refused at the remote peer-reflexive limit.
+    pub remote_peer_reflexive: u64,
+    /// Checklist overflow while forming signaled pairs.
+    pub signaled_pairs: u64,
+    /// Checklist overflow while forming triggered pairs.
+    pub triggered_pairs: u64,
+}
+
+// Reserve up to a quarter of each budget for authenticated discovery.
+fn signaling_limit(limit: usize) -> usize {
+    limit - (limit / 4).min(16)
+}
+
 /// Events from an [`IceAgent`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum IceAgentEvent {
@@ -371,7 +414,9 @@ impl IceAgent {
             last_now: None,
             ice_lite: false,
             max_candidate_pairs: None,
-            has_exceeded_max_candidate_pairs: false,
+            max_local_candidates: 128,
+            max_remote_candidates: 256,
+            candidate_overflow: IceCandidateOverflow::default(),
             local_credentials,
             remote_credentials: None,
             controlling: false,
@@ -419,10 +464,26 @@ impl IceAgent {
 
     /// The maximum number of candidate pairs to test.
     ///
-    /// Any pairs above this limit will be dropped (worst priority first).
+    /// Defaults to 100. A quarter of the slots, up to 16, are reserved for
+    /// triggered checks. Set this before adding candidates. Lowering it later
+    /// limits future admissions without removing existing checks.
     pub fn set_max_candidate_pairs(&mut self, max: usize) {
         self.max_candidate_pairs = Some(max);
-        self.has_exceeded_max_candidate_pairs = false; // Reset the flag.
+    }
+
+    /// Set retained local and remote candidate slot limits, including discarded slots.
+    ///
+    /// Defaults to 128 local and 256 remote. Each limit reserves a quarter of
+    /// the slots, up to 16, for authenticated peer-reflexive discovery.
+    /// Set this before adding candidates. Existing slots stay intact if a limit is lowered.
+    pub fn set_candidate_limits(&mut self, local: usize, remote: usize) {
+        self.max_local_candidates = local;
+        self.max_remote_candidates = remote;
+    }
+
+    /// Capacity counters since the last ICE restart.
+    pub fn candidate_overflow(&self) -> IceCandidateOverflow {
+        self.candidate_overflow
     }
 
     /// Whether ice_lite is enabled.
@@ -659,16 +720,24 @@ impl IceAgent {
     /// Returns `Some` if the candidate was added and `None` in all other cases.
     /// If the candidate was added, it should be signalled to the remote party.
     ///
-    /// Adding loopback addresses or multicast/broadcast addresses causes
-    /// an error.
-    pub fn add_local_candidate(&mut self, mut c: Candidate) -> Option<&Candidate> {
+    /// Use [`Self::try_add_local_candidate`] to distinguish capacity refusals.
+    pub fn add_local_candidate(&mut self, c: Candidate) -> Option<&Candidate> {
+        self.try_add_local_candidate(c).ok().flatten()
+    }
+
+    /// Add a local candidate, reporting capacity separately from ordinary rejection.
+    pub fn try_add_local_candidate(
+        &mut self,
+        mut c: Candidate,
+    ) -> Result<Option<&Candidate>, IceCandidateCapacity> {
         let ip = c.addr().ip();
+        let at_limit = self.local_candidates.len() >= signaling_limit(self.max_local_candidates);
 
         if self.ice_lite {
             // Reject all non-host candidates.
             if c.kind() != CandidateKind::Host {
                 debug!("Reject non-host candidate due to ice-lite mode: {:?}", c);
-                return None;
+                return Ok(None);
             }
         }
 
@@ -712,7 +781,12 @@ impl IceAgent {
                         Pii(&other),
                         Pii(&c)
                     );
-                    return None;
+                    return Ok(None);
+                }
+
+                if at_limit {
+                    self.candidate_overflow.local = self.candidate_overflow.local.saturating_add(1);
+                    return Err(IceCandidateCapacity::Local);
                 }
 
                 // Stop using the current candidate in favor of the new one.
@@ -732,6 +806,11 @@ impl IceAgent {
                 new_idx
             }
         } else {
+            if at_limit {
+                self.candidate_overflow.local = self.candidate_overflow.local.saturating_add(1);
+                return Err(IceCandidateCapacity::Local);
+            }
+
             let new_idx = self.local_candidates.len();
 
             debug!("Add local candidate ({new_idx}): {:?}", Pii(&c));
@@ -762,100 +841,34 @@ impl IceAgent {
 
         // We specifically use indexing here instead of `.get`.
         // If the index is wrong, this is a bug!
-        Some(&self.local_candidates[local_idx])
+        Ok(Some(&self.local_candidates[local_idx]))
     }
 
-    /// Adds a remote candidate.
+    /// Add a remote candidate. Check [`Self::candidate_overflow`] for capacity refusals.
+    pub fn add_remote_candidate(&mut self, c: Candidate) {
+        let _ = self.try_add_remote_candidate(c);
+    }
+
+    /// Add a remote candidate, reporting capacity separately from ordinary rejection.
     ///
-    /// Returns `false` if the candidate was not added because it is redundant.
-    /// Adding loopback addresses or multicast/broadcast addresses causes
-    /// an error.
-    pub fn add_remote_candidate(&mut self, mut c: Candidate) {
-        // This is a a:rtcp-mux-only implementation. The only component
-        // we accept is 1 for RTP.
-        if c.component_id() != 1 {
-            debug!("Reject candidate for component other than 1: {:?}", Pii(&c));
-            return;
-        }
-
-        if let Some(creds) = &self.remote_credentials {
-            if let Some(ufrag) = c.ufrag() {
-                if ufrag != creds.ufrag {
-                    debug!(
-                        "Reject candidate with ufrag mismatch: {} != {}",
-                        Pii(&ufrag),
-                        Pii(&creds.ufrag)
-                    );
-                    return;
-                }
-            }
-        }
-
-        // After we accepted the ufrag, don't keep this around since it will look
-        // confusing inspecting the state.
-        c.clear_ufrag();
-
-        let existing_pair = self.find_pair_for_equivalent_remote_candidate(&c);
-        let existing_candidate =
-            existing_pair.map(|p| (p.remote_idx(), &self.remote_candidates[p.remote_idx()]));
-
-        let existing_idx = match existing_candidate {
-            Some((_, o)) if !o.discarded() => {
-                // Existing non-discarded candidate in viable pair, ignore
-                // Discarded candidates and candidates not in a viable pair are handled below
-                trace!(
-                    "Ignoring candidate({c:?}) that exactly matches existing non-discarded candidate"
-                );
-                return;
-            }
-            Some((i, o)) if o.discarded() => Some(i),
-            _ => None,
-        };
-
-        let existing_prflx = self
-            .remote_candidates
-            .iter_mut()
-            .enumerate()
-            .find(|(_, v)| {
-                v.foundation() == REMOTE_PEER_REFLEXIVE_TEMP_FOUNDATION
-                    && v.kind() == CandidateKind::PeerReflexive
-                    && v.addr() == c.addr()
-            });
-
-        let ipv4 = c.addr().is_ipv4();
-
-        let remote_idx = if let Some((idx, existing)) = existing_prflx {
-            // If any subsequent candidate exchanges contain this peer-reflexive
-            // candidate, it will signal the actual foundation for the candidate.
-            debug!(
-                "Replace peer reflexive candidate, current: {:?} replaced with: {:?}",
-                Pii(&existing),
-                Pii(&c)
-            );
-            *existing = c;
-            idx
-        } else {
-            let existing_discarded = existing_idx.and_then(|idx| {
-                let o = &mut self.remote_candidates[idx];
-
-                o.discarded().then_some((idx, o))
-            });
-
-            if let Some((idx, other)) = existing_discarded {
-                debug!("Re-enable previously discarded remote: {:?}", Pii(&other));
-                other.set_discarded(false);
-                idx
-            } else {
-                let new_idx = self.remote_candidates.len();
-
-                debug!("Add remote candidate ({new_idx}): {:?}", Pii(&c));
-                self.remote_candidates.push(c);
-
-                new_idx
+    /// Returns whether a candidate slot was inserted, replaced, or re-enabled.
+    pub fn try_add_remote_candidate(&mut self, c: Candidate) -> Result<bool, IceCandidateCapacity> {
+        let limit = signaling_limit(self.max_remote_candidates);
+        let remote_idx = match Self::admit_remote_candidate(
+            &mut self.remote_candidates,
+            self.remote_credentials.as_ref(),
+            limit,
+            c,
+        ) {
+            Ok(Some(idx)) => idx,
+            Ok(None) => return Ok(false),
+            Err(e) => {
+                self.candidate_overflow.remote = self.candidate_overflow.remote.saturating_add(1);
+                return Err(e);
             }
         };
 
-        // These are the indexes of the local candidates this candidate should be paired with.
+        let ipv4 = self.remote_candidates[remote_idx].addr().is_ipv4();
         let local_idxs: Vec<_> = self
             .local_candidates
             .iter()
@@ -864,8 +877,91 @@ impl IceAgent {
             .map(|(i, _)| i)
             .collect();
 
-        let remote_idxs = [remote_idx];
-        self.form_pairs(&local_idxs, &remote_idxs);
+        self.form_pairs(&local_idxs, &[remote_idx]);
+        Ok(true)
+    }
+
+    /// Preflight SDP candidates against the target ICE generation.
+    ///
+    /// A failed preflight records one refusal and leaves candidates and credentials intact.
+    pub fn check_remote_candidate_batch<'a>(
+        &mut self,
+        credentials: &IceCreds,
+        restart: bool,
+        candidates: impl Iterator<Item = &'a Candidate>,
+    ) -> Result<(), IceCandidateCapacity> {
+        let mut slots = if restart {
+            Vec::new()
+        } else {
+            self.remote_candidates.clone()
+        };
+        let limit = signaling_limit(self.max_remote_candidates);
+        for candidate in candidates {
+            if let Err(e) =
+                Self::admit_remote_candidate(&mut slots, Some(credentials), limit, candidate.clone())
+            {
+                self.candidate_overflow.remote = self.candidate_overflow.remote.saturating_add(1);
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
+    fn admit_remote_candidate(
+        slots: &mut Vec<Candidate>,
+        credentials: Option<&IceCreds>,
+        limit: usize,
+        mut candidate: Candidate,
+    ) -> Result<Option<usize>, IceCandidateCapacity> {
+        if candidate.component_id() != 1 {
+            debug!("Reject candidate for component other than 1: {:?}", Pii(&candidate));
+            return Ok(None);
+        }
+        if let Some(creds) = credentials {
+            if candidate.ufrag().is_some_and(|ufrag| ufrag != creds.ufrag) {
+                debug!("Reject candidate with mismatched ufrag: {:?}", Pii(&candidate));
+                return Ok(None);
+            }
+        }
+        candidate.clear_ufrag();
+
+        // An equivalent candidate may exist before pairing or after its pair has been pruned.
+        if let Some((idx, existing)) = slots.iter_mut().enumerate().find(|(_, existing)| {
+            existing.addr() == candidate.addr()
+                && existing.base() == candidate.base()
+                && existing.proto() == candidate.proto()
+                && existing.kind() == candidate.kind()
+                && existing.raddr() == candidate.raddr()
+                && !(existing.kind() == CandidateKind::PeerReflexive
+                    && existing.foundation() == REMOTE_PEER_REFLEXIVE_TEMP_FOUNDATION
+                    && existing.foundation() != candidate.foundation())
+        }) {
+            if !existing.discarded() {
+                return Ok(None);
+            }
+            candidate.set_discarded(false);
+            *existing = candidate;
+            return Ok(Some(idx));
+        }
+
+        // Keep pair indexes stable when signaling supplies the real foundation.
+        if let Some((idx, existing)) = slots.iter_mut().enumerate().find(|(_, existing)| {
+            existing.foundation() == REMOTE_PEER_REFLEXIVE_TEMP_FOUNDATION
+                && existing.kind() == CandidateKind::PeerReflexive
+                && existing.proto() == candidate.proto()
+                && existing.addr() == candidate.addr()
+        }) {
+            *existing = candidate;
+            return Ok(Some(idx));
+        }
+
+        if slots.len() >= limit {
+            return Err(IceCandidateCapacity::Remote);
+        }
+
+        let idx = slots.len();
+        slots.push(candidate);
+        Ok(Some(idx))
     }
 
     /// Form pairs given two slices of indexes into the local_candidates and remote_candidates.
@@ -943,33 +1039,49 @@ impl IceAgent {
 
                 debug!("Add new pair {:?}", Pii(&pair));
 
-                // This is not a redundant pair, add it.
-                self.candidate_pairs.push(pair);
+                self.admit_pair(pair, false);
             }
         }
 
         // NB it would be nicer to have BTreeSet, but that makes it impossible to
         // get mut references to the elements in the list.
         self.candidate_pairs.sort();
+    }
 
-        // an ICE agent MUST limit the total number of connectivity checks
-        // the agent performs across all checklists in the checklist set.
-        // This is done by limiting the total number of candidate pairs in the
-        // checklist set. The default limit of candidate pairs for the checklist
-        // set is 100, but the value MUST be configurable.
-        //
-        // TODO: How does this work with trickle ice?
+    fn admit_pair(&mut self, pair: CandidatePair, triggered: bool) -> bool {
         let max = self.max_candidate_pairs.unwrap_or(100);
-
-        let num_pairs = self.candidate_pairs.len();
-        if num_pairs > max && !self.has_exceeded_max_candidate_pairs {
-            warn!(%max, %num_pairs, "Exceeded max number of candidate pairs");
-            self.has_exceeded_max_candidate_pairs = true;
+        let limit = if triggered { max } else { signaling_limit(max) };
+        if self.candidate_pairs.len() < limit {
+            self.candidate_pairs.push(pair);
+            return true;
         }
 
-        while self.candidate_pairs.len() > max {
-            let pair = self.candidate_pairs.pop();
-            debug!("Remove overflow pair {:?}", Pii(&pair));
+        let overflow = if triggered {
+            &mut self.candidate_overflow.triggered_pairs
+        } else {
+            &mut self.candidate_overflow.signaled_pairs
+        };
+        if *overflow == 0 {
+            warn!(limit, triggered, "ICE checklist admission limit reached");
+        }
+        *overflow = overflow.saturating_add(1);
+
+        // Keep viable, nominated, and in-flight paths at capacity.
+        let victim = self
+            .candidate_pairs
+            .iter_mut()
+            .filter(|p| {
+                p.state() == CheckState::Waiting
+                    && !p.is_nominated()
+                    && p.remote_binding_request_time().is_none()
+                    && p.prio() < pair.prio()
+            })
+            .min_by_key(|p| p.prio());
+        if let Some(victim) = victim {
+            *victim = pair;
+            true
+        } else {
+            false
         }
     }
 
@@ -1040,7 +1152,7 @@ impl IceAgent {
         self.remote_credentials = None;
         self.remote_candidates.clear();
         self.candidate_pairs.clear();
-        self.has_exceeded_max_candidate_pairs = false;
+        self.candidate_overflow = IceCandidateOverflow::default();
         self.transmit.clear();
         self.events.clear();
         self.discovered_recv.clear();
@@ -1216,6 +1328,8 @@ impl IceAgent {
 
         if packet.message.is_binding_request() {
             self.stun_server_handle_message(now, &packet);
+            // Requests report discovery only after a candidate and pair are admitted.
+            return true;
         } else if packet.message.is_successful_binding_response() {
             self.stun_client_handle_response(now, packet.message);
         } else if packet.message.is_failed_binding_response() {
@@ -1402,10 +1516,20 @@ impl IceAgent {
 
     fn emit_event(&mut self, event: IceAgentEvent) {
         if let IceAgentEvent::DiscoveredRecv { proto, source } = event {
-            if !self.discovered_recv.insert((proto, source)) {
-                // we already dispatched this discovered
+            let endpoint = (proto, source);
+            if self.discovered_recv.contains(&endpoint) {
                 return;
             }
+
+            // A binding response authenticates the transaction, not its source
+            // address. Keep discovery records tied to retained candidate slots.
+            if !self.remote_candidates.iter().any(|candidate| {
+                !candidate.discarded() && candidate.proto() == proto && candidate.addr() == source
+            }) {
+                return;
+            }
+
+            self.discovered_recv.insert(endpoint);
             self.stats.discovered_recv_count += 1;
         } else if matches!(event, IceAgentEvent::NominatedSend { .. }) {
             self.stats.nomination_send_count += 1;
@@ -1562,9 +1686,9 @@ impl IceAgent {
             // (i.e. host and server-reflexive could be the same).
             .max_by_key(|(_, c)| c.prio());
 
-        let remote_idx = if let Some((idx, _)) = found_in_remote {
+        let (remote_idx, discovered) = if let Some((idx, _)) = found_in_remote {
             trace!("Remote candidate for STUN request found");
-            idx
+            (idx, None)
         } else {
             let maybe_discarded = self
                 .remote_candidates
@@ -1575,6 +1699,22 @@ impl IceAgent {
                 // The remote has been discarded, we do not want to create a
                 // peer reflexive in this case.
                 trace!("STUN request ignored because remote candidate is discarded");
+                return;
+            }
+
+            if self.local_candidates[local_idx].discarded() {
+                return;
+            }
+
+            if self.remote_candidates.len() >= self.max_remote_candidates {
+                if self.candidate_overflow.remote_peer_reflexive == 0 {
+                    warn!(
+                        limit = self.max_remote_candidates,
+                        "ICE remote peer-reflexive candidate admission limit reached"
+                    );
+                }
+                self.candidate_overflow.remote_peer_reflexive =
+                    self.candidate_overflow.remote_peer_reflexive.saturating_add(1);
                 return;
             }
 
@@ -1604,11 +1744,8 @@ impl IceAgent {
                 Pii(&c)
             );
 
-            // This candidate is added to the list of remote candidates.  However,
-            // the ICE agent does not pair this candidate with any local candidates.
-            self.remote_candidates.push(c);
-
-            self.remote_candidates.len() - 1
+            // Keep the slot provisional until the triggered pair is admitted.
+            (self.remote_candidates.len(), Some(c))
         };
 
         let maybe_pair = self
@@ -1628,7 +1765,9 @@ impl IceAgent {
         } else {
             // If the pair is not already on the checklist:
             let local = &self.local_candidates[local_idx];
-            let remote = &self.remote_candidates[remote_idx];
+            let remote = discovered
+                .as_ref()
+                .unwrap_or_else(|| &self.remote_candidates[remote_idx]);
 
             if local.discarded() {
                 return; // Ignore STUN requests to discarded candidates
@@ -1643,7 +1782,12 @@ impl IceAgent {
 
             debug!("Created new pair for STUN request: {:?}", Pii(&pair));
 
-            self.candidate_pairs.push(pair);
+            if !self.admit_pair(pair, true) {
+                return;
+            }
+            if let Some(candidate) = discovered {
+                self.remote_candidates.push(candidate);
+            }
             self.candidate_pairs.sort();
         }
 
@@ -1651,8 +1795,7 @@ impl IceAgent {
             .candidate_pairs
             .iter_mut()
             .find(|p| p.local_idx() == local_idx && p.remote_idx() == remote_idx)
-            // unwrap is fine since we have inserted a pair if it was missing.
-            .unwrap();
+            .expect("existing or admitted triggered pair");
 
         let local = pair.local_candidate(&self.local_candidates);
         let proto = local.proto();
@@ -1723,6 +1866,10 @@ impl IceAgent {
         };
 
         self.transmit.push_back(trans);
+        self.emit_event(IceAgentEvent::DiscoveredRecv {
+            proto: req.proto,
+            source: req.source,
+        });
     }
 
     fn send_role_conflict_reply(&mut self, req: &StunRequest) {
@@ -1920,6 +2067,18 @@ impl IceAgent {
             );
             (pair, valid_idx)
         } else {
+            if self.local_candidates.len() >= self.max_local_candidates {
+                if self.candidate_overflow.local_peer_reflexive == 0 {
+                    warn!(
+                        limit = self.max_local_candidates,
+                        "ICE local peer-reflexive candidate admission limit reached"
+                    );
+                }
+                self.candidate_overflow.local_peer_reflexive =
+                    self.candidate_overflow.local_peer_reflexive.saturating_add(1);
+                return;
+            }
+
             let local_sent_from = pair.local_candidate(&self.local_candidates);
 
             // Like other candidates, a peer-reflexive candidate has a type, base, priority,
@@ -2210,6 +2369,227 @@ mod test {
     }
     fn ipv6_2() -> SocketAddr {
         "[1002::]:5000".parse().unwrap()
+    }
+
+    #[test]
+    fn candidate_admission_bounds_unpaired_duplicates_and_keeps_existing_local() {
+        let mut agent = new_test_agent();
+        agent.set_candidate_limits(1, 1);
+
+        let remote = Candidate::host(ipv4_3(), "udp").unwrap();
+        assert!(agent.try_add_remote_candidate(remote.clone()).unwrap());
+        assert!(!agent.try_add_remote_candidate(remote).unwrap());
+        let overflow = Candidate::host(ipv4_4(), "udp").unwrap();
+        assert_eq!(
+            agent.try_add_remote_candidate(overflow.clone()),
+            Err(IceCandidateCapacity::Remote)
+        );
+        agent.add_remote_candidate(overflow);
+        assert_eq!(agent.remote_candidates().count(), 1);
+        assert_eq!(agent.candidate_overflow().remote, 2);
+
+        let reflexive = Candidate::test_peer_rflx(ipv4_1(), ipv4_1(), "udp");
+        agent.add_local_candidate(reflexive).unwrap();
+        let host = Candidate::host(ipv4_1(), "udp").unwrap();
+        assert!(matches!(
+            agent.try_add_local_candidate(host),
+            Err(IceCandidateCapacity::Local)
+        ));
+        assert_eq!(
+            agent.local_candidates().next().unwrap().kind(),
+            CandidateKind::PeerReflexive
+        );
+        assert_eq!(agent.num_candidate_pairs(), 1);
+        assert_eq!(agent.candidate_overflow().local, 1);
+
+        agent.ice_restart(IceCreds::new().unwrap(), true);
+        assert_eq!(agent.local_candidates().count(), 1);
+        assert_eq!(agent.remote_candidates().count(), 0);
+        assert_eq!(agent.candidate_overflow(), IceCandidateOverflow::default());
+    }
+
+    #[test]
+    fn candidate_admission_remote_discovery_uses_reserve_and_retries() {
+        let mut agent = new_test_agent();
+        agent.set_candidate_limits(4, 5);
+        agent.set_max_candidate_pairs(4);
+        agent.set_controlling(false);
+        agent
+            .add_local_candidate(host("192.0.2.1:5000", "udp"))
+            .unwrap();
+        let remote_creds = IceCreds::new().unwrap();
+        agent.set_remote_credentials(remote_creds.clone());
+
+        for port in 5000..5004 {
+            assert!(
+                agent
+                    .try_add_remote_candidate(host(format!("198.51.100.1:{port}"), "udp"))
+                    .unwrap()
+            );
+        }
+        assert_eq!(agent.num_candidate_pairs(), 3);
+        assert_eq!(agent.candidate_overflow().signaled_pairs, 1);
+        assert_eq!(
+            agent.try_add_remote_candidate(host("198.51.100.1:5004", "udp")),
+            Err(IceCandidateCapacity::Remote)
+        );
+
+        let now = Instant::now();
+        let destination = "192.0.2.1:5000".parse().unwrap();
+        let receive = |agent: &mut IceAgent, source| {
+            let request =
+                make_serialized_binding_request(&agent.local_credentials, &remote_creds, true, 1);
+            assert!(agent.handle_packet(
+                now,
+                StunPacket {
+                    message: StunMessage::parse(&request).unwrap(),
+                    source,
+                    destination,
+                    proto: Protocol::Udp,
+                },
+            ));
+        };
+        receive(&mut agent, "198.51.100.1:5004".parse().unwrap());
+        assert!(agent.poll_transmit().is_some());
+        assert_eq!(agent.remote_candidates().count(), 5);
+        assert_eq!(agent.num_candidate_pairs(), 4);
+        assert_eq!(agent.stats().discovered_recv_count, 1);
+
+        let retry_source = "198.51.100.1:5005".parse().unwrap();
+        receive(&mut agent, retry_source);
+        assert!(agent.poll_transmit().is_none());
+        assert_eq!(agent.candidate_overflow().remote_peer_reflexive, 1);
+
+        agent.set_candidate_limits(4, 6);
+        receive(&mut agent, retry_source);
+        assert!(agent.poll_transmit().is_none());
+        assert_eq!(agent.candidate_overflow().triggered_pairs, 1);
+        assert_eq!(agent.remote_candidates().count(), 5);
+        assert_eq!(agent.num_candidate_pairs(), 4);
+        assert_eq!(agent.stats().discovered_recv_count, 1);
+
+        agent.set_max_candidate_pairs(5);
+        receive(&mut agent, retry_source);
+        assert!(agent.poll_transmit().is_some());
+        assert_eq!(agent.remote_candidates().count(), 6);
+        assert_eq!(agent.num_candidate_pairs(), 5);
+        assert_eq!(agent.stats().discovered_recv_count, 2);
+    }
+
+    #[test]
+    fn candidate_admission_local_discovery_uses_reserve_and_retries() {
+        let mut agent = new_test_agent();
+        agent.set_candidate_limits(4, 4);
+        agent.set_controlling(false);
+        for addr in [ipv4_1(), ipv4_2(), ipv4_3()] {
+            agent
+                .try_add_local_candidate(Candidate::host(addr, "udp").unwrap())
+                .unwrap()
+                .unwrap();
+        }
+        assert!(matches!(
+            agent.try_add_local_candidate(host("192.0.2.1:5000", "udp")),
+            Err(IceCandidateCapacity::Local)
+        ));
+
+        let remote_creds = IceCreds::new().unwrap();
+        agent.set_remote_credentials(remote_creds.clone());
+        agent.add_remote_candidate(Candidate::host(ipv4_4(), "udp").unwrap());
+
+        let now = Instant::now();
+        let reply = |agent: &mut IceAgent, pair, mapped| {
+            agent.stun_client_binding_request(now, pair, TransId::new().unwrap());
+            let request = agent.poll_transmit().unwrap();
+            let payload = Vec::from(request.contents);
+            let transaction = StunMessage::parse(&payload).unwrap().trans_id();
+            let bytes = make_authenticated_stun_reply(transaction, mapped, &remote_creds.pass);
+            (bytes, request.source)
+        };
+        let receive = |agent: &mut IceAgent, response, destination| {
+            assert!(agent.handle_packet(
+                now,
+                StunPacket {
+                    message: StunMessage::parse(response).unwrap(),
+                    source: ipv4_4(),
+                    destination,
+                    proto: Protocol::Udp,
+                },
+            ));
+        };
+
+        let first_address = "203.0.113.1:5000".parse().unwrap();
+        let (first, first_dest) = reply(&mut agent, 0, first_address);
+        receive(&mut agent, &first, first_dest);
+        assert_eq!(agent.local_candidates().count(), 4);
+        assert_eq!(agent.candidate_pairs[0].state(), CheckState::Succeeded);
+
+        let second_address = "203.0.113.2:5000".parse().unwrap();
+        let (second, second_dest) = reply(&mut agent, 1, second_address);
+        receive(&mut agent, &second, second_dest);
+        assert_eq!(agent.candidate_overflow().local_peer_reflexive, 1);
+        assert_eq!(agent.local_candidates().count(), 4);
+        assert_eq!(agent.candidate_pairs[1].state(), CheckState::InProgress);
+
+        agent.set_candidate_limits(5, 4);
+        receive(&mut agent, &second, second_dest);
+        assert_eq!(agent.local_candidates().count(), 5);
+        assert!(agent.local_candidates().any(|c| c.addr() == second_address));
+        assert_eq!(agent.candidate_pairs[1].state(), CheckState::Succeeded);
+    }
+
+    #[test]
+    fn candidate_admission_response_discovery_requires_admitted_endpoint() {
+        let mut agent = new_test_agent();
+        agent.set_candidate_limits(1, 1);
+        agent.set_controlling(false);
+        agent
+            .try_add_local_candidate(Candidate::host(ipv4_1(), "udp").unwrap())
+            .unwrap()
+            .unwrap();
+        agent
+            .try_add_remote_candidate(Candidate::host(ipv4_3(), "udp").unwrap())
+            .unwrap();
+
+        let remote_creds = IceCreds::new().unwrap();
+        agent.set_remote_credentials(remote_creds.clone());
+        let now = Instant::now();
+        let transaction = TransId::new().unwrap();
+        agent.stun_client_binding_request(now, 0, transaction);
+        let response = make_authenticated_stun_reply(transaction, ipv4_1(), &remote_creds.pass);
+        let receive = |agent: &mut IceAgent, proto, source| {
+            assert!(agent.handle_packet(
+                now,
+                StunPacket {
+                    message: StunMessage::parse(&response).unwrap(),
+                    source,
+                    destination: ipv4_1(),
+                    proto,
+                },
+            ));
+        };
+
+        for port in 5000..5010 {
+            receive(
+                &mut agent,
+                Protocol::Udp,
+                format!("198.51.100.1:{port}").parse().unwrap(),
+            );
+        }
+        receive(&mut agent, Protocol::Tcp, ipv4_3());
+        assert!(agent.discovered_recv.is_empty());
+        assert_eq!(agent.stats().discovered_recv_count, 0);
+
+        receive(&mut agent, Protocol::Udp, ipv4_3());
+        receive(&mut agent, Protocol::Udp, ipv4_3());
+        assert_eq!(agent.discovered_recv.len(), 1);
+        assert_eq!(agent.stats().discovered_recv_count, 1);
+        assert!(std::iter::from_fn(|| agent.poll_event()).any(|event| {
+            matches!(
+                event,
+                IceAgentEvent::DiscoveredRecv { proto: Protocol::Udp, source }
+                    if source == ipv4_3()
+            )
+        }));
     }
 
     #[test]

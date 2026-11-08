@@ -66,17 +66,9 @@ impl Sdp {
     }
 
     pub(crate) fn ice_candidates(&self) -> impl Iterator<Item = &Candidate> {
-        let mut candidates: HashSet<&Candidate> = HashSet::new();
-
-        // Session level ice candidates.
-        candidates.extend(self.session.ice_candidates());
-
-        // Ice candidates.
-        for m in &self.media_lines {
-            candidates.extend(m.ice_candidates());
-        }
-
-        candidates.into_iter()
+        self.session
+            .ice_candidates()
+            .chain(self.media_lines.iter().flat_map(|media| media.ice_candidates()))
     }
 
     /// Get the `a=sctp-init` value from the application m-line, if present.

@@ -719,7 +719,10 @@ use dtls::Dtls;
 
 use is::IceAgent;
 use is::IceAgentEvent;
-pub use is::{Candidate, CandidateBuilder, CandidateKind, IceConnectionState, IceCreds};
+pub use is::{
+    Candidate, CandidateBuilder, CandidateKind, IceCandidateCapacity, IceCandidateOverflow,
+    IceConnectionState, IceCreds,
+};
 
 #[path = "config.rs"]
 mod config_mod;
@@ -1354,6 +1357,7 @@ impl Rtc {
     ///
     /// If the candidate is accepted by the `Rtc` instance, it will return `Some` with a reference
     /// to it. You should then signal this candidate to the remote peer.
+    /// Use [`Rtc::try_add_local_candidate`] to distinguish capacity refusals.
     ///
     /// This library has no built-in discovery of local network addresses on the host
     /// or NATed addresses via a STUN server or TURN server. The user of the library
@@ -1385,6 +1389,7 @@ impl Rtc {
     ///
     /// However for the case of [Trickle Ice][1], this is the way to add remote candidates
     /// that are "trickled" from the other side.
+    /// Use [`Rtc::try_add_remote_candidate`] to distinguish capacity refusals.
     ///
     /// ```
     /// # use std::time::Instant;
@@ -1400,6 +1405,43 @@ impl Rtc {
     /// [1]: https://www.rfc-editor.org/rfc/rfc8838.txt
     pub fn add_remote_candidate(&mut self, c: Candidate) {
         self.ice.add_remote_candidate(c);
+    }
+
+    /// Set retained ICE candidate limits before adding candidates.
+    ///
+    /// Defaults to 128 local and 256 remote, including discarded slots.
+    /// Each limit reserves a quarter of its slots, up to 16, for authenticated discovery.
+    /// Existing slots stay intact if a limit is lowered.
+    pub fn set_ice_candidate_limits(&mut self, local: usize, remote: usize) {
+        self.ice.set_candidate_limits(local, remote);
+    }
+
+    /// Set the ICE checklist limit before adding candidates.
+    ///
+    /// Defaults to 100. A quarter of the slots, up to 16, are reserved for
+    /// triggered checks. Lowering the limit leaves existing checks intact.
+    pub fn set_ice_checklist_limit(&mut self, max: usize) {
+        self.ice.set_max_candidate_pairs(max);
+    }
+
+    /// ICE capacity counters since the last restart.
+    pub fn ice_candidate_overflow(&self) -> IceCandidateOverflow {
+        self.ice.candidate_overflow()
+    }
+
+    /// Add a local ICE candidate and report slot exhaustion separately from other rejection.
+    pub fn try_add_local_candidate(
+        &mut self,
+        c: Candidate,
+    ) -> Result<Option<&Candidate>, IceCandidateCapacity> {
+        self.ice.try_add_local_candidate(c)
+    }
+
+    /// Add a remote ICE candidate and report slot exhaustion separately from other rejection.
+    ///
+    /// Returns whether a candidate slot was inserted, replaced, or re-enabled.
+    pub fn try_add_remote_candidate(&mut self, c: Candidate) -> Result<bool, IceCandidateCapacity> {
+        self.ice.try_add_remote_candidate(c)
     }
 
     /// Checks if we are connected.
