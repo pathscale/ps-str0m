@@ -265,14 +265,13 @@ impl CandidatePair {
     }
 
     /// Records a new binding request attempt.
-    ///
-    /// Returns the transaction id to use in the STUN message.
     pub fn new_attempt(
         &mut self,
         now: Instant,
         timing_config: &StunTiming,
         controlling: bool,
-    ) -> TransId {
+        trans_id: TransId,
+    ) {
         // calculate a new time
         self.cached_next_attempt_time = None;
 
@@ -282,7 +281,7 @@ impl CandidatePair {
         }
 
         let attempt = BindingAttempt {
-            trans_id: TransId::new(),
+            trans_id,
             request_sent: now,
             respone_recv: None,
             nominated: self.is_nominated(),
@@ -306,10 +305,6 @@ impl CandidatePair {
         }
 
         trace!("Sending binding request: {:?}", self);
-
-        let last = self.binding_attempts.back().unwrap();
-
-        last.trans_id
     }
 
     /// Returns the binding attempt for the given STUN transaction id, if
@@ -594,7 +589,8 @@ mod tests {
         let mut now = Instant::now();
 
         for _ in 0..20 {
-            let id = pair.new_attempt(now, &stun_timing, false);
+            let id = TransId::new().unwrap();
+            pair.new_attempt(now, &stun_timing, false, id);
 
             now += Duration::from_millis(500);
 
@@ -604,7 +600,7 @@ mod tests {
         let offline_at = now;
 
         while pair.is_still_possible(now, &stun_timing) {
-            pair.new_attempt(now, &stun_timing, false);
+            pair.new_attempt(now, &stun_timing, false, TransId::new().unwrap());
             now = pair.next_binding_attempt(now, &stun_timing);
         }
 
@@ -623,7 +619,8 @@ mod tests {
         assert_eq!(pair.responses_received(), 0);
         assert_eq!(pair.total_round_trip_time(), Duration::ZERO);
 
-        let id1 = pair.new_attempt(now, &stun_timing, false);
+        let id1 = TransId::new().unwrap();
+        pair.new_attempt(now, &stun_timing, false, id1);
         pair.record_binding_response(now + Duration::from_millis(50), id1, 0);
         assert_eq!(pair.last_successful_rtt(), Some(Duration::from_millis(50)));
         assert_eq!(pair.responses_received(), 1);
@@ -631,12 +628,18 @@ mod tests {
 
         // Newer in-flight attempt without response shouldn't shadow the
         // older successful one or change cumulative counters.
-        let _id2 = pair.new_attempt(now + Duration::from_millis(100), &stun_timing, false);
+        pair.new_attempt(
+            now + Duration::from_millis(100),
+            &stun_timing,
+            false,
+            TransId::new().unwrap(),
+        );
         assert_eq!(pair.last_successful_rtt(), Some(Duration::from_millis(50)));
         assert_eq!(pair.responses_received(), 1);
 
         // A newer successful attempt replaces current rtt and accumulates totals.
-        let id3 = pair.new_attempt(now + Duration::from_millis(200), &stun_timing, false);
+        let id3 = TransId::new().unwrap();
+        pair.new_attempt(now + Duration::from_millis(200), &stun_timing, false, id3);
         pair.record_binding_response(now + Duration::from_millis(220), id3, 0);
         assert_eq!(pair.last_successful_rtt(), Some(Duration::from_millis(20)));
         assert_eq!(pair.responses_received(), 2);

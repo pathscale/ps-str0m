@@ -84,9 +84,12 @@ impl TestRtc {
     pub fn new(peer: Peer) -> Self {
         let now = Instant::now();
         let rtc = if let Some(crypto) = peer.crypto_provider() {
-            Rtc::builder().set_crypto_provider(crypto).build(now)
+            Rtc::builder()
+                .set_crypto_provider(crypto)
+                .build(now)
+                .unwrap()
         } else {
-            Rtc::new(now)
+            Rtc::new(now).unwrap()
         };
 
         Self::new_with_rtc(peer.span(), rtc)
@@ -102,7 +105,7 @@ impl TestRtc {
         } else {
             builder
         };
-        let rtc = f(builder).build(now);
+        let rtc = f(builder).build(now).unwrap();
         Self::new_with_rtc(peer.span(), rtc)
     }
 
@@ -470,7 +473,10 @@ pub fn connect_l_r() -> (TestRtc, TestRtc) {
     }
 
     let now = Instant::now();
-    connect_l_r_with_rtc(rtc1_builder.build(now), rtc2_builder.build(now))
+    connect_l_r_with_rtc(
+        rtc1_builder.build(now).unwrap(),
+        rtc2_builder.build(now).unwrap(),
+    )
 }
 
 pub fn connect_l_r_with_rtc(rtc1: Rtc, rtc2: Rtc) -> (TestRtc, TestRtc) {

@@ -1,6 +1,6 @@
 [package]
 name = "ps-str0m"
-version = "0.25.0"
+version = "0.26.0"
 authors = ["Martin Algesten <martin@algesten.se>", "Hugo Tunius <h@tunius.se>", "Davide Bertola <dade@dadeb.it>"]
 description = "WebRTC library in Sans-IO style; fork of str0m with pure-Rust ChaCha20-Poly1305 DTLS and SRTP"
 license = "MIT OR Apache-2.0"
@@ -27,9 +27,9 @@ exclude = ["crates/fuzz"]
 
 [workspace.dependencies]
 # Internal crates
-str0m = { package = "ps-str0m", version = "^0.25.0", path = ".", default-features = false }
+str0m = { package = "ps-str0m", version = "^0.26.0", path = ".", default-features = false }
 str0m-proto = { package = "ps-str0m-proto", version = "^0.8.0", path = "crates/proto", default-features = false }
-is = { package = "ps-str0m-is", version = "^0.11.1", path = "crates/is", default-features = false }
+is = { package = "ps-str0m-is", version = "^0.12.0", path = "crates/is", default-features = false }
 str0m-rust-crypto = { package = "ps-str0m-rust-crypto", version = "^0.2.0", path = "crypto/rust-crypto" }
 
 # Core dependencies
@@ -81,6 +81,7 @@ name = "str0m"
 # The RustCrypto provider supplies pure-Rust ChaCha20-Poly1305 DTLS and SRTP.
 default = ["rust-crypto"]
 rust-crypto = ["dep:str0m-rust-crypto"]
+ice-entropy-js = ["is/ice-entropy-js"]
 unversioned = []
 
 # Redacts personally identifiable information (PII) from logs debug and above

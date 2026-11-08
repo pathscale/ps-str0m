@@ -525,11 +525,19 @@ fn non_media_creator_cannot_change_inactive_to_recvonly() {
     let (mut l, mut r) = (
         TestRtc::new_with_rtc(
             info_span!("L"),
-            Rtc::builder().clear_codecs().enable_vp8(true).build(now),
+            Rtc::builder()
+                .clear_codecs()
+                .enable_vp8(true)
+                .build(now)
+                .unwrap(),
         ),
         TestRtc::new_with_rtc(
             info_span!("R"),
-            Rtc::builder().clear_codecs().enable_vp8(true).build(now),
+            Rtc::builder()
+                .clear_codecs()
+                .enable_vp8(true)
+                .build(now)
+                .unwrap(),
         ),
     );
 
@@ -561,11 +569,19 @@ fn media_creator_can_change_inactive_to_recvonly() {
     let (mut l, mut r) = (
         TestRtc::new_with_rtc(
             info_span!("L"),
-            Rtc::builder().clear_codecs().enable_vp8(true).build(now),
+            Rtc::builder()
+                .clear_codecs()
+                .enable_vp8(true)
+                .build(now)
+                .unwrap(),
         ),
         TestRtc::new_with_rtc(
             info_span!("R"),
-            Rtc::builder().clear_codecs().enable_vp8(true).build(now),
+            Rtc::builder()
+                .clear_codecs()
+                .enable_vp8(true)
+                .build(now)
+                .unwrap(),
         ),
     );
 
@@ -603,7 +619,8 @@ fn max_bundle_offer_accepted() {
             .clear_codecs()
             .enable_opus(true, false)
             .enable_vp8(true)
-            .build(Instant::now()),
+            .build(Instant::now())
+            .unwrap(),
     );
 
     // This is a max-bundle offer where the video m-line has port=0
@@ -723,7 +740,8 @@ fn h264_offer_with_higher_level_negotiates() {
         Rtc::builder()
             .clear_codecs()
             .enable_h264(true)
-            .build(Instant::now()),
+            .build(Instant::now())
+            .unwrap(),
     );
 
     // A remote offer (taken verbatim from Safari/WebKit) advertising
@@ -806,7 +824,10 @@ fn answer_msid_is_not_taken_from_the_offer() {
     init_log();
     init_crypto_default();
 
-    let mut r = TestRtc::new_with_rtc(info_span!("R"), Rtc::builder().build(Instant::now()));
+    let mut r = TestRtc::new_with_rtc(
+        info_span!("R"),
+        Rtc::builder().build(Instant::now()).unwrap(),
+    );
 
     // An offer whose audio m-line is tagged with the "no MediaStream" id.
     let remote_offer = "\
@@ -868,11 +889,11 @@ fn snap_sdp_both_sides_enabled() -> Result<(), RtcError> {
     let now = Instant::now();
     let mut l = TestRtc::new_with_rtc(
         info_span!("L"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
     let mut r = TestRtc::new_with_rtc(
         info_span!("R"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -933,11 +954,11 @@ fn snap_sdp_offerer_only_enabled() -> Result<(), RtcError> {
     let now = Instant::now();
     let mut l = TestRtc::new_with_rtc(
         info_span!("L"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
     let mut r = TestRtc::new_with_rtc(
         info_span!("R"),
-        Rtc::builder().build(now), // SNAP not explicitly enabled
+        Rtc::builder().build(now).unwrap(), // SNAP not explicitly enabled
     );
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -996,11 +1017,11 @@ fn snap_sdp_missing_answer_falls_back_to_regular_handshake() -> Result<(), RtcEr
     let now = Instant::now();
     let mut l = TestRtc::new_with_rtc(
         info_span!("L"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
     let mut r = TestRtc::new_with_rtc(
         info_span!("R"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -1071,8 +1092,8 @@ fn snap_sdp_neither_enabled() -> Result<(), RtcError> {
     init_crypto_default();
 
     let now = Instant::now();
-    let mut l = TestRtc::new_with_rtc(info_span!("L"), Rtc::builder().build(now));
-    let mut r = TestRtc::new_with_rtc(info_span!("R"), Rtc::builder().build(now));
+    let mut l = TestRtc::new_with_rtc(info_span!("L"), Rtc::builder().build(now).unwrap());
+    let mut r = TestRtc::new_with_rtc(info_span!("R"), Rtc::builder().build(now).unwrap());
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
     r.add_host_candidate((Ipv4Addr::new(2, 2, 2, 2), 2000).into());
@@ -1133,11 +1154,11 @@ fn snap_sdp_renegotiation_preserves_sctp_init() -> Result<(), RtcError> {
     let now = Instant::now();
     let mut l = TestRtc::new_with_rtc(
         info_span!("L"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
     let mut r = TestRtc::new_with_rtc(
         info_span!("R"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -1225,11 +1246,11 @@ fn snap_sdp_renegotiation_changed_sctp_init_rejected() -> Result<(), RtcError> {
     let now = Instant::now();
     let mut l = TestRtc::new_with_rtc(
         info_span!("L"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
     let mut r = TestRtc::new_with_rtc(
         info_span!("R"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -1274,11 +1295,11 @@ fn snap_sdp_renegotiation_missing_sctp_init_rejected() -> Result<(), RtcError> {
     let now = Instant::now();
     let mut l = TestRtc::new_with_rtc(
         info_span!("L"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
     let mut r = TestRtc::new_with_rtc(
         info_span!("R"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -1330,11 +1351,11 @@ fn snap_sdp_answerer_only_enabled() -> Result<(), RtcError> {
     let now = Instant::now();
     let mut l = TestRtc::new_with_rtc(
         info_span!("L"),
-        Rtc::builder().build(now), // SNAP disabled
+        Rtc::builder().build(now).unwrap(), // SNAP disabled
     );
     let mut r = TestRtc::new_with_rtc(
         info_span!("R"),
-        Rtc::builder().set_snap_enabled(true).build(now), // SNAP enabled
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(), // SNAP enabled
     );
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -1398,11 +1419,11 @@ fn snap_sdp_malformed_base64_ignored() -> Result<(), RtcError> {
     let now = Instant::now();
     let mut l = TestRtc::new_with_rtc(
         info_span!("L"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
     let mut r = TestRtc::new_with_rtc(
         info_span!("R"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -1439,11 +1460,11 @@ fn snap_sdp_renegotiation_reverse_direction_changed_sctp_init_rejected() -> Resu
     let now = Instant::now();
     let mut l = TestRtc::new_with_rtc(
         info_span!("L"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
     let mut r = TestRtc::new_with_rtc(
         info_span!("R"),
-        Rtc::builder().set_snap_enabled(true).build(now),
+        Rtc::builder().set_snap_enabled(true).build(now).unwrap(),
     );
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -1536,7 +1557,7 @@ fn build_params(span: Span, params: &[PayloadParams]) -> TestRtc {
             p.spec().format,
         );
     }
-    let rtc = b.build(Instant::now());
+    let rtc = b.build(Instant::now()).unwrap();
 
     TestRtc::new_with_rtc(span, rtc)
 }
@@ -1546,7 +1567,7 @@ fn build_exts(span: Span, exts: ExtensionMap) -> TestRtc {
     b = b.enable_vp8(true);
     let e = b.extension_map();
     *e = exts;
-    let rtc = b.build(Instant::now());
+    let rtc = b.build(Instant::now()).unwrap();
 
     TestRtc::new_with_rtc(span, rtc)
 }

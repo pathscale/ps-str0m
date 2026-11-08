@@ -21,7 +21,8 @@ pub fn mediatime_backwards() -> Result<(), RtcError> {
     // Enable raw packets to trace the RTP headers
     r.rtc = str0m::Rtc::builder()
         .enable_raw_packets(true)
-        .build(Instant::now());
+        .build(Instant::now())
+        .unwrap();
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
     r.add_host_candidate((Ipv4Addr::new(2, 2, 2, 2), 2000).into());

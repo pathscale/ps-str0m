@@ -36,8 +36,8 @@ impl VideoTest {
         let now = Instant::now();
         let sender_config = Rtc::builder().set_rtp_mode(true).enable_raw_packets(true);
         let (mut sender, mut receiver) = connect_l_r_with_rtc(
-            sender_config.build(now),
-            receiver_config.enable_raw_packets(true).build(now),
+            sender_config.build(now).unwrap(),
+            receiver_config.enable_raw_packets(true).build(now).unwrap(),
         );
         for _ in 0..1000 {
             if sender.is_connected() && receiver.is_connected() {
@@ -255,8 +255,11 @@ pub fn audio_start_of_talk_spurt() -> Result<(), RtcError> {
     init_crypto_default();
 
     let now = Instant::now();
-    let rtc1 = Rtc::builder().set_rtp_mode(true).build(now);
-    let rtc2 = Rtc::builder().set_reordering_size_audio(0).build(now);
+    let rtc1 = Rtc::builder().set_rtp_mode(true).build(now).unwrap();
+    let rtc2 = Rtc::builder()
+        .set_reordering_size_audio(0)
+        .build(now)
+        .unwrap();
 
     let (mut l, mut r) = connect_l_r_with_rtc(rtc1, rtc2);
 

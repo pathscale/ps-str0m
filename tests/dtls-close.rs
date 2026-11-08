@@ -22,8 +22,14 @@ fn direct_pair_with_config(configure: impl Fn(RtcConfig) -> RtcConfig) -> (TestR
     init_crypto_default();
 
     let now = Instant::now();
-    let mut l = TestRtc::new_with_rtc(info_span!("L"), configure(Rtc::builder()).build(now));
-    let mut r = TestRtc::new_with_rtc(info_span!("R"), configure(Rtc::builder()).build(now));
+    let mut l = TestRtc::new_with_rtc(
+        info_span!("L"),
+        configure(Rtc::builder()).build(now).unwrap(),
+    );
+    let mut r = TestRtc::new_with_rtc(
+        info_span!("R"),
+        configure(Rtc::builder()).build(now).unwrap(),
+    );
 
     let host_l = Candidate::host((Ipv4Addr::new(1, 1, 1, 1), 1000).into(), "udp").unwrap();
     let host_r = Candidate::host((Ipv4Addr::new(2, 2, 2, 2), 2000).into(), "udp").unwrap();

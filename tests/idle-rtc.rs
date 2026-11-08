@@ -13,7 +13,7 @@ pub fn idle_rtc_instance() -> Result<(), RtcError> {
 
     let mut next_time = Instant::now();
     let mut spin_count = 0;
-    let mut rtc = Rtc::new(next_time);
+    let mut rtc = Rtc::new(next_time).unwrap();
 
     for i in 1..(ITERATIONS + 1) {
         rtc.handle_input(Input::Timeout(next_time))?;

@@ -20,8 +20,8 @@ pub fn stats() -> Result<(), RtcError> {
     let r_config = RtcConfig::new().set_stats_interval(Some(Duration::from_secs(10)));
 
     let now = Instant::now();
-    let mut l = TestRtc::new_with_rtc(info_span!("L"), l_config.build(now));
-    let mut r = TestRtc::new_with_rtc(info_span!("R"), r_config.build(now));
+    let mut l = TestRtc::new_with_rtc(info_span!("L"), l_config.build(now).unwrap());
+    let mut r = TestRtc::new_with_rtc(info_span!("R"), r_config.build(now).unwrap());
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
     r.add_host_candidate((Ipv4Addr::new(2, 2, 2, 2), 2000).into());
@@ -154,7 +154,8 @@ pub fn peer_media_stats_do_not_drop_when_streams_are_removed() -> Result<(), Rtc
     let config_r = RtcConfig::new()
         .set_rtp_mode(true)
         .set_stats_interval(Some(Duration::from_secs(1)));
-    let (mut l, mut r) = connect_l_r_with_rtc(config_l.build(now), config_r.build(now));
+    let (mut l, mut r) =
+        connect_l_r_with_rtc(config_l.build(now).unwrap(), config_r.build(now).unwrap());
 
     let mid = "aud".into();
     let ssrc: Ssrc = 1.into();

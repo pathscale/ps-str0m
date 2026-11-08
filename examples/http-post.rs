@@ -60,9 +60,16 @@ fn web_request(request: &Request) -> Response {
     let mut data = request.data().expect("body to be available");
 
     let offer: SdpOffer = serde_json::from_reader(&mut data).expect("serialized offer");
-    let mut rtc = RtcConfig::new()
+    let mut rtc = match RtcConfig::new()
         // .set_ice_lite(true)
-        .build(Instant::now());
+        .build(Instant::now())
+    {
+        Ok(rtc) => rtc,
+        Err(err) => {
+            warn!("RTC initialization failed: {err}");
+            return Response::text("RTC initialization failed").with_status_code(500);
+        }
+    };
 
     let addr = util::select_host_address();
 
@@ -82,7 +89,9 @@ fn web_request(request: &Request) -> Response {
     thread::spawn(|| {
         if let Err(e) = run(rtc, socket) {
             eprintln!("Exited: {e:?}");
-            process::exit(1);
+            if !matches!(&e, RtcError::Ice(str0m::error::IceError::Entropy(_))) {
+                process::exit(1);
+            }
         }
     });
 

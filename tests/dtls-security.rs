@@ -85,7 +85,10 @@ fn dtls_with_ice_lite() -> Result<(), RtcError> {
     if let Some(crypto) = Peer::Right.crypto_provider() {
         rtc_r_builder = rtc_r_builder.set_crypto_provider(crypto);
     }
-    let mut r = TestRtc::new_with_rtc(Peer::Right.span(), rtc_r_builder.build(Instant::now()));
+    let mut r = TestRtc::new_with_rtc(
+        Peer::Right.span(),
+        rtc_r_builder.build(Instant::now()).unwrap(),
+    );
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
     r.add_host_candidate((Ipv4Addr::new(2, 2, 2, 2), 2000).into());
@@ -131,7 +134,10 @@ fn dtls_pregenerated_certificate() -> Result<(), RtcError> {
         rtc_l_builder = rtc_l_builder.set_crypto_provider(crypto);
     }
 
-    let mut l = TestRtc::new_with_rtc(Peer::Left.span(), rtc_l_builder.build(Instant::now()));
+    let mut l = TestRtc::new_with_rtc(
+        Peer::Left.span(),
+        rtc_l_builder.build(Instant::now()).unwrap(),
+    );
     let mut r = TestRtc::new(Peer::Right);
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -181,8 +187,14 @@ fn dtls_pregenerated_certificate_same_fingerprint() -> Result<(), RtcError> {
         rtc2_builder = rtc2_builder.set_crypto_provider(crypto);
     }
 
-    let mut l1 = TestRtc::new_with_rtc(Peer::Left.span(), rtc1_builder.build(Instant::now()));
-    let mut l2 = TestRtc::new_with_rtc(Peer::Left.span(), rtc2_builder.build(Instant::now()));
+    let mut l1 = TestRtc::new_with_rtc(
+        Peer::Left.span(),
+        rtc1_builder.build(Instant::now()).unwrap(),
+    );
+    let mut l2 = TestRtc::new_with_rtc(
+        Peer::Left.span(),
+        rtc2_builder.build(Instant::now()).unwrap(),
+    );
 
     let finger1 = l1.direct_api().local_dtls_fingerprint().clone();
     let finger2 = l2.direct_api().local_dtls_fingerprint().clone();

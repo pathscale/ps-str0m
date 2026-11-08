@@ -58,7 +58,7 @@
 //! # use std::time::Instant;
 //! # use str0m::{Rtc, Candidate};
 //! // Instantiate a new Rtc instance.
-//! let mut rtc = Rtc::new(Instant::now());
+//! let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
 //!
 //! //  Add some ICE candidate such as a locally bound UDP port.
 //! let addr = "1.2.3.4:5000".parse().unwrap();
@@ -85,7 +85,7 @@
 //! # use str0m::{Rtc, Candidate};
 //! # use str0m::media::{MediaKind, Direction};
 //! // Instantiate a new Rtc instance.
-//! let mut rtc = Rtc::new(Instant::now());
+//! let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
 //!
 //! // Add some ICE candidate such as a locally bound UDP port.
 //! let addr = "1.2.3.4:5000".parse().unwrap();
@@ -164,7 +164,7 @@
 //! # use std::io::ErrorKind;
 //! # use std::net::UdpSocket;
 //! # use std::time::{Duration, Instant};
-//! # let mut rtc = Rtc::new(Instant::now());
+//! # let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
 //! // A UdpSocket we obtained _somehow_.
 //! let socket: UdpSocket = todo!();
 //!
@@ -361,10 +361,17 @@
 //!
 //! let rtc = Rtc::builder()
 //!     .set_crypto_provider(Arc::new(str0m_rust_crypto::default_provider()))
-//!     .build(Instant::now());
+//!     .build(Instant::now())
+//!     .expect("RTC initialization");
 //! ```
 //!
 //! # Project status
+//!
+//! Random ICE credentials and STUN transaction IDs require a working
+//! cryptographic entropy source. On `wasm32-unknown-unknown` the
+//! `ice-entropy-js` feature selects the wasm-bindgen JavaScript backend for ICE;
+//! it requires a browser or Node.js host with cryptographic randomness. This
+//! feature does not select a DTLS or SRTP provider.
 //!
 //! Str0m was originally developed by Martin Algesten of
 //! [Lookback][lookback]. We use str0m for a specific use case: str0m as a
@@ -439,7 +446,8 @@
 //!     // Enable RTP mode for this Rtc instance.
 //!     // This disables `MediaEvent` and the `Writer::write` API.
 //!     .set_rtp_mode(true)
-//!     .build(Instant::now());
+//!     .build(Instant::now())
+//!     .expect("RTC initialization");
 //! ```
 //!
 //! RTP mode gives us some new API points.
@@ -865,7 +873,7 @@ pub use error::RtcError;
 /// ```no_run
 /// # use std::time::Instant;
 /// # use str0m::{Rtc, Output, Input};
-/// let mut rtc = Rtc::new(Instant::now());
+/// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
 ///
 /// loop {
 ///     // Drain poll_output until it returns the next timeout.
@@ -1178,11 +1186,12 @@ impl Rtc {
     /// use std::time::Instant;
     /// use str0m::Rtc;
     ///
-    /// let rtc = Rtc::new(Instant::now());
+    /// let rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     /// ```
-    pub fn new(start: Instant) -> Self {
-        let config = RtcConfig::default();
-        Self::new_from_config(config, start).expect("Failed to create Rtc from default config")
+    ///
+    /// Returns an error if initialization fails, including if ICE credentials cannot be generated.
+    pub fn new(start: Instant) -> Result<Self, RtcError> {
+        Self::new_from_config(RtcConfig::default(), start)
     }
 
     /// Creates a config builder that configures an [`Rtc`] instance.
@@ -1192,13 +1201,22 @@ impl Rtc {
     /// # use str0m::Rtc;
     /// let rtc = Rtc::builder()
     ///     .set_ice_lite(true)
-    ///     .build(Instant::now());
+    ///     .build(Instant::now())
+    ///     .expect("RTC initialization");
     /// ```
     pub fn builder() -> RtcConfig {
         RtcConfig::new()
     }
 
     pub(crate) fn new_from_config(config: RtcConfig, start: Instant) -> Result<Self, RtcError> {
+        Self::new_from_config_with(config, start, IceCreds::new)
+    }
+
+    fn new_from_config_with(
+        config: RtcConfig,
+        start: Instant,
+        new_credentials: impl FnOnce() -> Result<IceCreds, crate::error::IceError>,
+    ) -> Result<Self, RtcError> {
         let crypto_provider = config
             .crypto_provider
             .clone()
@@ -1215,7 +1233,10 @@ impl Rtc {
         // Capture before any partial moves of `config` below.
         let mtu = config.mtu.clone();
 
-        let local_creds = config.local_ice_credentials.unwrap_or_else(IceCreds::new);
+        let local_creds = match config.local_ice_credentials {
+            Some(creds) => creds,
+            None => new_credentials()?,
+        };
         let mut ice = IceAgent::with_hmac(local_creds, crypto_provider.sha1_hmac_provider);
         if config.ice_lite {
             ice.set_ice_lite(config.ice_lite);
@@ -1300,7 +1321,7 @@ impl Rtc {
     /// ```
     /// # use std::time::Instant;
     /// # use str0m::Rtc;
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// assert!(rtc.is_alive());
     ///
@@ -1319,7 +1340,7 @@ impl Rtc {
     /// ```
     /// # use std::time::Instant;
     /// # use str0m::Rtc;
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// rtc.disconnect();
     /// assert!(!rtc.is_alive());
@@ -1344,7 +1365,7 @@ impl Rtc {
     /// ```
     /// # use std::time::Instant;
     /// # use str0m::{Rtc, Candidate};
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// let a = "127.0.0.1:5000".parse().unwrap();
     /// let c = Candidate::host(a, "udp").unwrap();
@@ -1368,7 +1389,7 @@ impl Rtc {
     /// ```
     /// # use std::time::Instant;
     /// # use str0m::{Rtc, Candidate};
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// let a = "1.2.3.4:5000".parse().unwrap();
     /// let c = Candidate::host(a, "udp").unwrap();
@@ -1395,7 +1416,7 @@ impl Rtc {
     /// # use str0m::Rtc;
     /// # use str0m::media::{MediaKind, Direction};
     /// # use str0m::change::SdpAnswer;
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// let mut changes = rtc.sdp_api();
     /// let mid_audio = changes.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
@@ -1429,7 +1450,7 @@ impl Rtc {
     /// # use str0m::Rtc;
     /// # use str0m::media::{MediaData, Mid};
     /// # use str0m::format::PayloadParams;
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// // add candidates, do SDP negotiation
     /// let mid: Mid = todo!(); // obtain mid from Event::MediaAdded.
@@ -1868,7 +1889,7 @@ impl Rtc {
     /// ```
     /// # use str0m::{Rtc, Reason};
     /// # use std::time::Instant;
-    /// let rtc = Rtc::new(Instant::now());
+    /// let rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// // Before any call to poll_output(), the reason is the default.
     /// assert_eq!(rtc.last_timeout_reason(), Reason::NotHappening);
@@ -1894,7 +1915,11 @@ impl Rtc {
     /// # use str0m::{Rtc, Input};
     /// // A vec holding the managed rtc instances. One instance per remote peer.
     /// let now = Instant::now();
-    /// let mut rtcs = vec![Rtc::new(now), Rtc::new(now), Rtc::new(now)];
+    /// let mut rtcs = vec![
+    ///     Rtc::new(now).expect("RTC initialization"),
+    ///     Rtc::new(now).expect("RTC initialization"),
+    ///     Rtc::new(now).expect("RTC initialization"),
+    /// ];
     ///
     /// // Configure instances with local ice candidates etc.
     ///
@@ -1951,16 +1976,19 @@ impl Rtc {
     /// It's always okay to call [`Rtc::handle_input()`] with a timeout, also before the
     /// time obtained via [`Rtc::poll_output()`].
     ///
+    /// If generating a STUN transaction ID fails, the binding check remains due.
+    /// Retry it with a timeout input; a receive input may already have been processed.
+    ///
     /// ```no_run
     /// # use str0m::{Rtc, Input};
     /// # use std::time::Instant;
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// loop {
     ///     let timeout: Instant = todo!(); // rtc.poll_output() until we get a timeout.
     ///
     ///     let input: Input = todo!(); // wait for network data or timeout.
-    ///     rtc.handle_input(input);
+    ///     rtc.handle_input(input).expect("RTC input");
     /// }
     /// ```
     pub fn handle_input(&mut self, input: Input) -> Result<(), RtcError> {
@@ -2038,7 +2066,8 @@ impl Rtc {
         }
 
         self.last_now = now;
-        self.ice.handle_timeout(now);
+        // An entropy failure leaves the ICE check due; drive the other timers anyway.
+        let ice_result = self.ice.handle_timeout(now);
         self.sctp.handle_timeout(now);
         self.chan.handle_timeout(now, &mut self.sctp);
         self.session.handle_timeout(now)?;
@@ -2067,7 +2096,7 @@ impl Rtc {
             }
         }
 
-        Ok(())
+        ice_result.map_err(RtcError::from)
     }
 
     fn do_handle_receive(&mut self, recv_time: Instant, r: net::Receive) -> Result<(), RtcError> {
@@ -2110,7 +2139,7 @@ impl Rtc {
     /// ```no_run
     /// # use std::time::Instant;
     /// # use str0m::{Rtc, channel::ChannelId};
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// let cid: ChannelId = todo!(); // obtain channel id from Event::ChannelOpen
     /// let channel = rtc.channel(cid).unwrap();
@@ -2228,17 +2257,41 @@ mod test {
     use super::*;
 
     #[test]
+    fn rtc_initialization_propagates_entropy_failure() {
+        use crate::error::IceError;
+
+        init_crypto_default();
+        let now = Instant::now();
+        let error = Rtc::new_from_config_with(RtcConfig::new(), now, || {
+            Err(IceError::Entropy(std::io::Error::other("injected")))
+        })
+        .unwrap_err();
+        assert!(matches!(error, RtcError::Ice(IceError::Entropy(_))));
+
+        let credentials = IceCreds {
+            ufrag: "test".into(),
+            pass: "examplecredentialpassword".into(),
+        };
+        let config = RtcConfig::new().set_local_ice_credentials(credentials.clone());
+        let rtc = Rtc::new_from_config_with(config, now, || {
+            panic!("explicit ICE credentials must bypass generation")
+        })
+        .unwrap();
+        assert_eq!(rtc.ice.local_credentials(), &credentials);
+    }
+
+    #[test]
     fn rtc_is_send() {
         fn is_send<T: Send>(_t: T) {}
         fn is_sync<T: Sync>(_t: T) {}
-        is_send(Rtc::new(Instant::now()));
-        is_sync(Rtc::new(Instant::now()));
+        is_send(Rtc::new(Instant::now()).expect("RTC initialization"));
+        is_sync(Rtc::new(Instant::now()).expect("RTC initialization"));
     }
 
     #[test]
     fn rtc_is_unwind_safe() {
         fn is_unwind_safe<T: UnwindSafe>(_t: T) {}
-        is_unwind_safe(Rtc::new(Instant::now()));
+        is_unwind_safe(Rtc::new(Instant::now()).expect("RTC initialization"));
     }
 
     #[test]

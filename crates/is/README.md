@@ -4,8 +4,14 @@ The fork package is `ps-str0m-is`; its library import remains `is`:
 
 ```toml
 [dependencies]
-is = { package = "ps-str0m-is", version = "^0.11.1" }
+is = { package = "ps-str0m-is", version = "^0.12.0" }
 ```
+
+ICE credentials and STUN transaction IDs use cryptographic randomness and
+return an entropy error if generation fails. On `wasm32-unknown-unknown`,
+enable `ice-entropy-js` and build with wasm-bindgen for a browser or Node.js
+host that supplies cryptographic randomness. Without that feature, ICE
+randomness on that target returns an unsupported entropy error.
 
 ## is -- ICE in Sans-IO style
 
@@ -26,7 +32,7 @@ This is a [Sans-IO][sansio] implementation. The `IceAgent` never touches
 a socket. Instead you drive it in a loop:
 
 1. `poll_timeout()` -- when to wake up next.
-2. `handle_timeout(now)` -- advance timers.
+2. `handle_timeout(now)` -- advance timers and handle any entropy error.
 3. `poll_transmit()` -- STUN packets to send.
 4. `handle_packet(now, pkt)` -- feed incoming STUN.
 5. `poll_event()` -- state changes and nominations.
@@ -40,7 +46,7 @@ test harness.
 use is::{IceAgent, IceCreds, Candidate};
 
 // Create an agent with random credentials.
-let mut agent = IceAgent::new(IceCreds::new());
+let mut agent = IceAgent::new(IceCreds::new().expect("ICE credentials"));
 
 // Tell the agent about a local socket.
 let addr = "192.168.1.100:5000".parse().unwrap();

@@ -273,7 +273,7 @@ fn build_params(
             param.spec().format,
         );
     }
-    TestRtc::new_with_rtc(span, builder.build(Instant::now()))
+    TestRtc::new_with_rtc(span, builder.build(Instant::now()).unwrap())
 }
 
 fn progress_until_cn_events(

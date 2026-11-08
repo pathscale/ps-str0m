@@ -15,7 +15,10 @@ pub fn data_channel_direct() -> Result<(), RtcError> {
 
     let mut l = TestRtc::new(Peer::Left);
 
-    let rtc_r = RtcConfig::new().set_ice_lite(true).build(Instant::now());
+    let rtc_r = RtcConfig::new()
+        .set_ice_lite(true)
+        .build(Instant::now())
+        .unwrap();
     let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc_r);
 
     let host1 = Candidate::host((Ipv4Addr::new(1, 1, 1, 1), 1000).into(), "udp")?;

@@ -21,7 +21,7 @@ fn rtc_with_red(peer: Peer, stats: bool) -> TestRtc {
     if let Some(crypto) = peer.crypto_provider() {
         builder = builder.set_crypto_provider(crypto);
     }
-    TestRtc::new_with_rtc(peer.span(), builder.build(now))
+    TestRtc::new_with_rtc(peer.span(), builder.build(now).unwrap())
 }
 
 fn media_count(r: &TestRtc) -> usize {
@@ -305,7 +305,7 @@ pub fn red_send_toggle_no_renegotiation() {
     if let Some(crypto) = Peer::Right.crypto_provider() {
         r_builder = r_builder.set_crypto_provider(crypto);
     }
-    let mut r = TestRtc::new_with_rtc(Peer::Right.span(), r_builder.build(now));
+    let mut r = TestRtc::new_with_rtc(Peer::Right.span(), r_builder.build(now).unwrap());
 
     l.set_forced_time_advance(Duration::from_millis(1));
     r.set_forced_time_advance(Duration::from_millis(1));
@@ -389,7 +389,7 @@ pub fn red_rtp_mode_passthrough() {
     if let Some(crypto) = Peer::Right.crypto_provider() {
         r_builder = r_builder.set_crypto_provider(crypto);
     }
-    let mut r = TestRtc::new_with_rtc(Peer::Right.span(), r_builder.build(now));
+    let mut r = TestRtc::new_with_rtc(Peer::Right.span(), r_builder.build(now).unwrap());
 
     l.set_forced_time_advance(Duration::from_millis(1));
     r.set_forced_time_advance(Duration::from_millis(1));
@@ -508,7 +508,7 @@ mod raw {
             rb = rb.set_crypto_provider(c);
         }
 
-        let (mut l, mut r) = connect_l_r_with_rtc(lb.build(now), rb.build(now));
+        let (mut l, mut r) = connect_l_r_with_rtc(lb.build(now).unwrap(), rb.build(now).unwrap());
 
         let mid: Mid = "aud".into();
         let ssrc: Ssrc = 42.into();

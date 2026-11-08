@@ -15,7 +15,10 @@ pub fn ice_lite_premature_disconnect() -> Result<(), RtcError> {
 
     let mut l = TestRtc::new(Peer::Left);
 
-    let rtc = RtcConfig::new().set_ice_lite(true).build(Instant::now());
+    let rtc = RtcConfig::new()
+        .set_ice_lite(true)
+        .build(Instant::now())
+        .unwrap();
     let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc);
 
     r.set_netem(NetemConfig::new().latency(Duration::from_millis(5)));

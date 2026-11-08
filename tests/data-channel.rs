@@ -359,7 +359,7 @@ fn connect_with_channel(
         if let Some(crypto) = peer.crypto_provider() {
             builder = builder.set_crypto_provider(crypto);
         }
-        config(builder).build(Instant::now())
+        config(builder).build(Instant::now()).unwrap()
     };
     let (mut l, mut r) = connect_l_r_with_rtc(build(Peer::Left), build(Peer::Right));
 

@@ -294,7 +294,7 @@ pub fn recycling_with_media_type_change() {
             None,
             FormatParams::default(),
         );
-        TestRtc::new_with_rtc(span, b.build(Instant::now()))
+        TestRtc::new_with_rtc(span, b.build(Instant::now()).unwrap())
     };
     let mut l = build(info_span!("L"));
     let mut r = build(info_span!("R"));
@@ -517,7 +517,7 @@ fn build_params(span: Span, params: &[PayloadParams]) -> TestRtc {
             p.spec().format,
         );
     }
-    TestRtc::new_with_rtc(span, b.build(Instant::now()))
+    TestRtc::new_with_rtc(span, b.build(Instant::now()).unwrap())
 }
 
 fn vp8(pt: u8) -> PayloadParams {

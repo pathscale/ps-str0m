@@ -1,6 +1,6 @@
 [package]
 name = "ps-str0m-is"
-version = "0.11.1"
+version = "0.12.0"
 authors = ["Martin Algesten <martin@algesten.se>", "Thomas Eizinger <thomas@eizinger.io>"]
 description = "ICE (Interactive Connectivity Establishment) in Sans-IO style"
 license = "MIT OR Apache-2.0"
@@ -16,6 +16,7 @@ name = "is"
 default = ["sha1"]
 sha1 = ["dep:hmac", "dep:sha1_"]
 pii = ["str0m-proto/pii"]
+ice-entropy-js = ["dep:getrandom"]
 _internal_test_exports = ["str0m-proto/_internal_test_exports"]
 
 [dependencies]
@@ -27,6 +28,12 @@ subtle.workspace = true
 hmac = { workspace = true, optional = true }
 # Package rename not supported with workspace inheritance
 sha1_ = { package = "sha1", version = "0.10", optional = true }
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+rand_core = { version = "0.6", default-features = false, features = ["getrandom", "std"] }
+
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", optional = true, features = ["js", "std"] }
 
 [dev-dependencies]
 serde_json.workspace = true

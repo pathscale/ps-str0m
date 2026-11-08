@@ -17,7 +17,8 @@ pub fn audio_stream_then_inactive_with_bwe() -> Result<(), RtcError> {
     // Only sender (L) needs BWE enabled
     let rtc1 = Rtc::builder()
         .enable_bwe(Some(Bitrate::kbps(800)))
-        .build(Instant::now());
+        .build(Instant::now())
+        .unwrap();
 
     let mut l = TestRtc::new_with_rtc(Peer::Left.span(), rtc1);
     let mut r = TestRtc::new(Peer::Right);

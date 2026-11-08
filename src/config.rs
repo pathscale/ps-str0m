@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::Rtc;
+use crate::RtcError;
 use crate::config::DtlsCert;
 use crate::crypto::CryptoProvider;
 use crate::crypto::dtls::DtlsVersion;
@@ -24,7 +25,8 @@ use crate::rtp_::{Bitrate, Extension, ExtensionMap};
 ///
 /// let rtc = RtcConfig::new()
 ///     .set_ice_lite(true)
-///     .build(Instant::now());
+///     .build(Instant::now())
+///     .expect("RTC initialization");
 /// # }
 /// ```
 ///
@@ -230,7 +232,8 @@ impl RtcConfig {
     ///     .clear_codecs()
     ///     .enable_opus(true, false)
     ///     .enable_vp8(true)
-    ///     .build(Instant::now());
+    ///     .build(Instant::now())
+    ///     .expect("RTC initialization");
     /// # }
     /// ```
     pub fn clear_codecs(mut self) -> Self {
@@ -856,8 +859,11 @@ impl RtcConfig {
     }
 
     /// Create a [`Rtc`] from the configuration.
-    pub fn build(self, start: Instant) -> Rtc {
-        Rtc::new_from_config(self, start).expect("Failed to create Rtc from config")
+    ///
+    /// Returns an error if initialization fails, including if random ICE credentials
+    /// cannot be generated when no credentials were supplied.
+    pub fn build(self, start: Instant) -> Result<Rtc, RtcError> {
+        Rtc::new_from_config(self, start)
     }
 }
 
