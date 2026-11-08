@@ -68,6 +68,14 @@ pub enum RtcError {
     /// ICE agent errors.
     Ice(IceError),
 
+    /// Remote SDP exceeds the ICE candidate admission limit.
+    IceCandidateCapacity {
+        /// The candidate limit that was reached.
+        capacity: crate::IceCandidateCapacity,
+        /// The original pending offer when accepting an answer, for retry.
+        pending: Option<crate::change::SdpPendingOffer>,
+    },
+
     /// SCTP (data channel engine) errors.
     Sctp(SctpError),
 
@@ -115,6 +123,7 @@ impl fmt::Display for RtcError {
             }
             RtcError::Net(err) => write!(f, "{}", err),
             RtcError::Ice(err) => write!(f, "{}", err),
+            RtcError::IceCandidateCapacity { capacity, .. } => write!(f, "{}", capacity),
             RtcError::Sctp(err) => write!(f, "{}", err),
             RtcError::ChangesOutOfOrder => write!(f, "Changes made out of order"),
             RtcError::SrtcpIndexExhausted => {
@@ -138,6 +147,7 @@ impl Error for RtcError {
             RtcError::Packet(_, _, err) => Some(err),
             RtcError::Net(err) => Some(err),
             RtcError::Ice(err) => Some(err),
+            RtcError::IceCandidateCapacity { capacity, .. } => Some(capacity),
             RtcError::Sctp(err) => Some(err),
             _ => None,
         }
