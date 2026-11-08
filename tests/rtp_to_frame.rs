@@ -1050,3 +1050,69 @@ fn video_reorder_timeout_does_not_change_audio() -> Result<(), RtcError> {
     assert_ne!(t.receiver.last_timeout_reason(), Reason::ReceiveReorder);
     Ok(())
 }
+
+#[test]
+fn video_h264_configured_reassembly_limit_errors_and_recovers() -> Result<(), RtcError> {
+    use str0m::error::PacketError;
+
+    let mut t = VideoTest::with_codec(
+        Rtc::builder()
+            .set_reordering_size_video(0)
+            .set_h26x_reassembly_limit(12),
+        false,
+        Codec::H264,
+    )?;
+    let ssrc = 1337.into();
+
+    // At the limit: two NALs and their four-byte start codes.
+    t.write(ssrc, 47_000, 1000, &[0x61, 0x11], false)?;
+    t.write(ssrc, 47_001, 1000, &[0x61, 0x22], true)?;
+
+    // The wire input is five bytes, but the reconstructed frame is 13.
+    t.write(ssrc, 47_002, 2000, &[0x65, 0x33], false)?;
+    assert!(matches!(
+        t.write(ssrc, 47_003, 2000, &[0x61, 0x44, 0x55], true),
+        Err(RtcError::Packet(
+            _,
+            _,
+            PacketError::ErrH26xReassemblyLimit { limit: 12 }
+        ))
+    ));
+
+    // A new frame after the surfaced error cannot include the rejected bytes.
+    t.write(ssrc, 47_004, 3000, &[0x61, 0x66], true)?;
+
+    // Wire admission fails before a marker or end FU. The reconstructed
+    // bytes would fit, but the four RTP payloads total 13 bytes.
+    t.write(ssrc, 47_005, 4000, &[0x7c, 0x85, 0x11], false)?;
+    t.write(ssrc, 47_006, 4000, &[0x7c, 0x05, 0x22], false)?;
+    t.write(ssrc, 47_007, 4000, &[0x7c, 0x05, 0x33], false)?;
+    assert!(matches!(
+        t.write(ssrc, 47_008, 4000, &[0x7c, 0x05, 0x44, 0x55], false),
+        Err(RtcError::Packet(
+            _,
+            _,
+            PacketError::ErrH26xReassemblyLimit { limit: 12 }
+        ))
+    ));
+    t.write(ssrc, 47_009, 5000, &[0x61, 0x77], true)?;
+
+    let samples: Vec<&[u8]> = t
+        .receiver
+        .events
+        .iter()
+        .filter_map(|(_, event)| match event {
+            Event::MediaData(data) => Some(data.data.as_ref()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        samples,
+        [
+            &[0, 0, 0, 1, 0x61, 0x11, 0, 0, 0, 1, 0x61, 0x22][..],
+            &[0, 0, 0, 1, 0x61, 0x66][..],
+            &[0, 0, 0, 1, 0x61, 0x77][..],
+        ]
+    );
+    Ok(())
+}

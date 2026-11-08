@@ -1,5 +1,6 @@
 #![allow(clippy::all)]
 
+use super::h26x::{Aggregation, Reassembly, aggregation_size, checked_add, nalu_prefix};
 use super::{CodecExtra, Depacketizer, PacketError, Packetizer};
 
 /// H264 information describing the depacketized / packetized data
@@ -275,131 +276,120 @@ impl Packetizer for H264Packetizer {
 pub struct H264Depacketizer {
     /// Whether to output in AVC format (length-prefixed NALUs) instead of Annex B format
     pub is_avc: bool,
-    fua_buffer: Option<Vec<u8>>,
+    reassembly: Reassembly<1>,
+}
+
+impl H264Depacketizer {
+    /// Set the maximum Annex-B or AVC bytes in an access unit, including any
+    /// pending NAL header and its four-byte prefix. The default is 8 MiB.
+    /// Pass the same output vector for all packets in the access unit.
+    /// Output already in that vector counts toward the limit.
+    /// Changing the limit discards any unfinished fragmented NAL.
+    pub fn set_reassembly_limit(&mut self, limit: usize) {
+        self.reassembly.set_limit(limit);
+    }
+
+    /// Discard any unfinished fragmented NAL. Call this on RTP discontinuity
+    /// or when abandoning an access unit; this API has no RTP sequence or time.
+    pub fn reset_reassembly(&mut self) {
+        self.reassembly.reset();
+    }
+
+    pub(super) fn reassembly_limit(&self) -> usize {
+        self.reassembly.limit()
+    }
+
+    /// Finish an access unit and discard any unfinished NAL, returning an
+    /// error if a fragment sequence did not end.
+    pub fn finish_reassembly(&mut self) -> Result<(), PacketError> {
+        self.reassembly.finish()
+    }
+
+    fn depacketize_packet(
+        &mut self,
+        packet: &[u8],
+        out: &mut Vec<u8>,
+        extra: &mut CodecExtra,
+    ) -> Result<(), PacketError> {
+        let &[b0, ..] = packet else {
+            return Err(PacketError::ErrShortPacket);
+        };
+        let nalu_type = b0 & NALU_TYPE_BITMASK;
+        let mut is_keyframe = matches!(extra, CodecExtra::H264(e) if e.is_keyframe);
+        if nalu_type != FUA_NALU_TYPE {
+            self.reset_reassembly();
+        }
+
+        match nalu_type {
+            1..=23 => {
+                let limit = self.reassembly.limit();
+                let prefix = nalu_prefix(packet.len(), self.is_avc, limit)?;
+                self.reassembly.reserve(out, checked_add(prefix.len(), packet.len(), limit)?)?;
+                out.extend_from_slice(&prefix);
+                out.extend_from_slice(packet);
+                is_keyframe |= nalu_type == IDR_NALU_TYPE;
+            }
+            STAPA_NALU_TYPE => {
+                let mut units = Aggregation::stap_a(&packet[STAPA_HEADER_SIZE..]);
+                let size = aggregation_size(units.clone(), 1, self.reassembly.limit(), |nalu| {
+                    if !matches!(nalu.first().map(|b| *b & NALU_TYPE_BITMASK), Some(1..=23)) {
+                        return Err(PacketError::ErrShortPacket);
+                    }
+                    Ok(())
+                })?;
+                self.reassembly.reserve(out, size)?;
+                while let Some(nalu) = units.next_nalu()? {
+                    let prefix = nalu_prefix(nalu.len(), self.is_avc, self.reassembly.limit())?;
+                    out.extend_from_slice(&prefix);
+                    out.extend_from_slice(nalu);
+                    is_keyframe |= nalu[0] & NALU_TYPE_BITMASK == IDR_NALU_TYPE;
+                }
+            }
+            FUA_NALU_TYPE => {
+                let [_, fu, payload @ ..] = packet else {
+                    return Err(PacketError::ErrShortPacket);
+                };
+                let kind = *fu & NALU_TYPE_BITMASK;
+                if b0 & 0x80 != 0 || !(1..=23).contains(&kind) {
+                    return Err(PacketError::ErrH26xFragmentSequence);
+                }
+                let start = *fu & FU_START_BITMASK != 0;
+                let end = *fu & FU_END_BITMASK != 0;
+                let header = [(b0 & NALU_REF_IDC_BITMASK) | kind];
+                // RFC 6184 permits an empty FU payload.
+                if !self
+                    .reassembly
+                    .fragment((start, end), header, payload, out, self.is_avc)?
+                {
+                    return Ok(());
+                }
+                is_keyframe |= kind == IDR_NALU_TYPE;
+            }
+            _ => return Err(PacketError::NaluTypeIsNotHandled(nalu_type)),
+        }
+        *extra = CodecExtra::H264(H264CodecExtra { is_keyframe });
+        Ok(())
+    }
 }
 
 impl Depacketizer for H264Depacketizer {
     fn out_size_hint(&self, packets_size: usize) -> Option<usize> {
-        // Roughly account for Annex B start codes or AVC length prefixes.
-        let estimated_packets = (packets_size / 1200).saturating_add(1);
-        Some(packets_size.saturating_add(4usize.saturating_mul(estimated_packets)))
+        Some(self.reassembly.size_hint(packets_size))
     }
 
-    /// depacketize parses the passed byte slice and stores the result in the
-    /// H264Packet this method is called upon
     fn depacketize(
         &mut self,
         packet: &[u8],
         out: &mut Vec<u8>,
         extra: &mut CodecExtra,
     ) -> Result<(), PacketError> {
-        if packet.len() == 0 {
-            return Err(PacketError::ErrShortPacket);
+        let result = self.depacketize_packet(packet, out, extra);
+        if result.is_err() {
+            self.reset_reassembly();
         }
-
-        // NALU Types
-        // https://tools.ietf.org/html/rfc6184#section-5.4
-        let b0 = packet[0];
-        let nalu_type = b0 & NALU_TYPE_BITMASK;
-
-        match nalu_type {
-            t @ 1..=23 => {
-                let is_keyframe = if let CodecExtra::H264(e) = extra {
-                    (t == IDR_NALU_TYPE) | e.is_keyframe
-                } else {
-                    t == IDR_NALU_TYPE
-                };
-                *extra = CodecExtra::H264(H264CodecExtra { is_keyframe });
-
-                if self.is_avc {
-                    out.extend_from_slice(&(packet.len() as u32).to_be_bytes());
-                } else {
-                    out.extend_from_slice(ANNEXB_NALUSTART_CODE);
-                }
-                out.extend_from_slice(packet);
-                Ok(())
-            }
-            STAPA_NALU_TYPE => {
-                let mut curr_offset = STAPA_HEADER_SIZE;
-                while curr_offset + 1 < packet.len() {
-                    let nalu_size =
-                        ((packet[curr_offset] as usize) << 8) | packet[curr_offset + 1] as usize;
-                    curr_offset += STAPA_NALU_LENGTH_SIZE;
-
-                    if curr_offset + nalu_size > packet.len() {
-                        return Err(PacketError::StapASizeLargerThanBuffer(
-                            nalu_size,
-                            packet.len() - curr_offset,
-                        ));
-                    }
-
-                    let Some(b0) = packet.get(curr_offset) else {
-                        continue;
-                    };
-                    let t = b0 & NALU_TYPE_BITMASK;
-                    let is_keyframe = if let CodecExtra::H264(e) = extra {
-                        (t == IDR_NALU_TYPE) | e.is_keyframe
-                    } else {
-                        t == IDR_NALU_TYPE
-                    };
-                    *extra = CodecExtra::H264(H264CodecExtra { is_keyframe });
-
-                    if self.is_avc {
-                        out.extend_from_slice(&(nalu_size as u32).to_be_bytes());
-                    } else {
-                        out.extend_from_slice(ANNEXB_NALUSTART_CODE);
-                    }
-                    out.extend_from_slice(&packet[curr_offset..curr_offset + nalu_size]);
-                    curr_offset += nalu_size;
-                }
-
-                Ok(())
-            }
-            FUA_NALU_TYPE => {
-                if packet.len() < FUA_HEADER_SIZE as usize {
-                    return Err(PacketError::ErrShortPacket);
-                }
-
-                if self.fua_buffer.is_none() {
-                    self.fua_buffer = Some(Vec::new());
-                }
-
-                if let Some(fua_buffer) = &mut self.fua_buffer {
-                    fua_buffer.extend_from_slice(&packet[FUA_HEADER_SIZE as usize..]);
-                }
-
-                let b1 = packet[1];
-                if b1 & FU_END_BITMASK != 0 {
-                    let nalu_ref_idc = b0 & NALU_REF_IDC_BITMASK;
-                    let fragmented_nalu_type = b1 & NALU_TYPE_BITMASK;
-
-                    let is_keyframe = if let CodecExtra::H264(e) = extra {
-                        (fragmented_nalu_type == IDR_NALU_TYPE) | e.is_keyframe
-                    } else {
-                        fragmented_nalu_type == IDR_NALU_TYPE
-                    };
-                    *extra = CodecExtra::H264(H264CodecExtra { is_keyframe });
-
-                    if let Some(fua_buffer) = self.fua_buffer.take() {
-                        if self.is_avc {
-                            out.extend_from_slice(&((fua_buffer.len() + 1) as u32).to_be_bytes());
-                        } else {
-                            out.extend_from_slice(ANNEXB_NALUSTART_CODE);
-                        }
-                        out.push(nalu_ref_idc | fragmented_nalu_type);
-                        out.extend_from_slice(&fua_buffer);
-                    }
-
-                    Ok(())
-                } else {
-                    Ok(())
-                }
-            }
-            _ => Err(PacketError::NaluTypeIsNotHandled(nalu_type)),
-        }
+        result
     }
 
-    /// is_partition_head checks if this is the head of a packetized nalu stream.
     fn is_partition_head(&self, packet: &[u8]) -> bool {
         if packet.len() < 2 {
             return false;
@@ -582,15 +572,15 @@ mod test {
     #[test]
     fn h264_large_out() -> Result<(), PacketError> {
         let large_payload_packetized = vec![
-            &[0x1c, 0x80, 0x01, 0x02, 0x03],
-            &[0x1c, 0x00, 0x04, 0x05, 0x06],
-            &[0x1c, 0x00, 0x07, 0x08, 0x09],
-            &[0x1c, 0x00, 0x10, 0x11, 0x12],
-            &[0x1c, 0x40, 0x13, 0x14, 0x15],
+            &[0x1c, 0x81, 0x01, 0x02, 0x03],
+            &[0x1c, 0x01, 0x04, 0x05, 0x06],
+            &[0x1c, 0x01, 0x07, 0x08, 0x09],
+            &[0x1c, 0x01, 0x10, 0x11, 0x12],
+            &[0x1c, 0x41, 0x13, 0x14, 0x15],
         ];
 
         let large_payload = &[
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+            0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
             0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
         ];
 
@@ -612,15 +602,15 @@ mod test {
     #[test]
     fn h264_large_out_avc() -> Result<(), PacketError> {
         let large_payload_packetized = vec![
-            &[0x1c, 0x80, 0x01, 0x02, 0x03],
-            &[0x1c, 0x00, 0x04, 0x05, 0x06],
-            &[0x1c, 0x00, 0x07, 0x08, 0x09],
-            &[0x1c, 0x00, 0x10, 0x11, 0x12],
-            &[0x1c, 0x40, 0x13, 0x14, 0x15],
+            &[0x1c, 0x81, 0x01, 0x02, 0x03],
+            &[0x1c, 0x01, 0x04, 0x05, 0x06],
+            &[0x1c, 0x01, 0x07, 0x08, 0x09],
+            &[0x1c, 0x01, 0x10, 0x11, 0x12],
+            &[0x1c, 0x41, 0x13, 0x14, 0x15],
         ];
 
         let large_payload_avc = &[
-            0x00, 0x00, 0x00, 0x10, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+            0x00, 0x00, 0x00, 0x10, 0x01, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
             0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
         ];
 
@@ -780,25 +770,19 @@ mod test {
         assert!(e.is_keyframe);
 
         // First byte is STAPA NALU type
-        let packet = vec![
-            vec![
-                120, 0, 15, 103, 66, 192, 21, 140, 141, 64, 160, 203, 207, 0, 240, 136, 70, 160, 0,
-                4, 104, 206, 60, 128, 1, 20, 101,
-            ],
-            vec![0; 276],
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-        pck.depacketize(packet.as_slice(), &mut out, &mut extra)?;
+        extra = CodecExtra::None;
+        let packet = [0x78, 0, 2, 0x67, 0x42, 0, 2, 0x65, 0x11];
+        pck.depacketize(&packet, &mut out, &mut extra)?;
         let CodecExtra::H264(e) = extra else {
             panic!("Expected CodecExtra::H264");
         };
         assert!(e.is_keyframe);
 
         // First byte is FUA NALU type
-        let packet = [124, 69];
-        pck.depacketize(&packet, &mut out, &mut extra)?;
+        extra = CodecExtra::None;
+        pck.depacketize(&[124, 133], &mut out, &mut extra)?;
+        assert_eq!(extra, CodecExtra::None);
+        pck.depacketize(&[124, 69], &mut out, &mut extra)?;
         let CodecExtra::H264(e) = extra else {
             panic!("Expected CodecExtra::H264");
         };
@@ -838,7 +822,12 @@ mod test {
         let mut pck = H264Depacketizer::default();
         let mut extra = CodecExtra::None;
         let mut out = vec![];
-        pck.depacketize(PACKET, &mut out, &mut extra).unwrap();
+        assert_eq!(
+            pck.depacketize(PACKET, &mut out, &mut extra),
+            Err(PacketError::ErrShortPacket)
+        );
+        assert!(out.is_empty());
+        assert_eq!(extra, CodecExtra::None);
     }
 
     #[test]

@@ -8,6 +8,12 @@ use std::fmt;
 pub enum PacketError {
     ErrShortPacket,
     ErrPayloadTooLarge,
+    /// An H264, H265, or H266 input or reconstructed output exceeded its byte budget.
+    ErrH26xReassemblyLimit { limit: usize },
+    /// An H264, H265, or H266 fragment cannot complete a valid NAL sequence.
+    ErrH26xFragmentSequence,
+    /// Failed to reserve memory within the H264, H265, or H266 byte budget.
+    ErrH26xReassemblyAllocation,
     ErrTooManySpatialLayers,
     ErrTooManyPDiff,
     ErrH265CorruptedPacket,
@@ -28,6 +34,13 @@ impl fmt::Display for PacketError {
         match self {
             PacketError::ErrShortPacket => write!(f, "Packet is too short"),
             PacketError::ErrPayloadTooLarge => write!(f, "Payload exceeds the MTU"),
+            PacketError::ErrH26xReassemblyLimit { limit } => {
+                write!(f, "H26x reassembly exceeds its {limit}-byte limit")
+            }
+            PacketError::ErrH26xFragmentSequence => write!(f, "Invalid H26x fragment sequence"),
+            PacketError::ErrH26xReassemblyAllocation => {
+                write!(f, "Could not allocate H26x reassembly buffer")
+            }
             PacketError::ErrTooManySpatialLayers => write!(f, "Too many spatial layers"),
             PacketError::ErrTooManyPDiff => write!(f, "Too many P-Diff"),
             PacketError::ErrH265CorruptedPacket => write!(f, "H265 corrupted packet"),
