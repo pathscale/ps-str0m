@@ -44,8 +44,8 @@ fn ssrc_change_resets_every_payload_type_on_the_stream() -> Result<(), RtcError>
     init_crypto_default();
     let now = Instant::now();
     let (mut l, mut r) = connect_l_r_with_rtc(
-        Rtc::builder().set_rtp_mode(true).build(now),
-        Rtc::builder().build(now),
+        Rtc::builder().set_rtp_mode(true).build(now).unwrap(),
+        Rtc::builder().build(now).unwrap(),
     );
     let mid = "vid".into();
     let rid = "hi".into();

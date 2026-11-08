@@ -80,11 +80,18 @@ fn web_request(request: &Request, addr: SocketAddr, tx: SyncSender<Rtc>) -> Resp
     let mut data = request.data().expect("body to be available");
 
     let offer: SdpOffer = serde_json::from_reader(&mut data).expect("serialized offer");
-    let mut rtc = Rtc::builder()
+    let mut rtc = match Rtc::builder()
         // Uncomment this to see statistics
         // .set_stats_interval(Some(Duration::from_secs(1)))
         // .set_ice_lite(true)
-        .build(Instant::now());
+        .build(Instant::now())
+    {
+        Ok(rtc) => rtc,
+        Err(err) => {
+            warn!("RTC initialization failed: {err}");
+            return Response::text("RTC initialization failed").with_status_code(500);
+        }
+    };
 
     // Add the shared UDP socket as a host candidate
     let candidate = Candidate::host(addr, "udp").expect("a host candidate");
@@ -563,11 +570,14 @@ impl Client {
     }
 
     fn handle_offer(&mut self, offer: SdpOffer) {
-        let answer = self
-            .rtc
-            .sdp_api()
-            .accept_offer(offer)
-            .expect("offer to be accepted");
+        let answer = match self.rtc.sdp_api().accept_offer(offer) {
+            Ok(answer) => answer,
+            Err(error) => {
+                warn!("Client ({}) SDP offer failed: {error}", *self.id);
+                self.rtc.disconnect();
+                return;
+            }
+        };
 
         // Keep local track state in sync, cancelling any pending negotiation
         // so we can redo it after this offer is handled.

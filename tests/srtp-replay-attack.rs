@@ -105,12 +105,14 @@ pub fn srtp_replay_attack_frame_mode() -> Result<(), RtcError> {
     let rtc1 = Rtc::builder()
         .set_rtp_mode(true)
         .enable_raw_packets(true)
-        .build(now);
+        .build(now)
+        .unwrap();
     let rtc2 = Rtc::builder()
         .enable_raw_packets(true)
         // release packet straight away
         .set_reordering_size_audio(0)
-        .build(now);
+        .build(now)
+        .unwrap();
 
     let (mut l, mut r) = connect_l_r_with_rtc(rtc1, rtc2);
 

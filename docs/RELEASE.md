@@ -1,23 +1,26 @@
 # Release: ps-str0m
 
 The fork publishes four production packages. Their library imports retain the
-existing names, so downstream Rust source does not need to change.
+existing names. In ps-str0m 0.26 and ps-str0m-is 0.12, callers must handle
+errors when creating random ICE credentials, initializing RTC, or requesting
+an SDP ICE restart. Standalone ICE users must also handle errors when driving
+ICE timeouts or creating STUN transaction IDs.
 
 | Publish order | Package | Version | Library import |
 | --- | --- | --- | --- |
 | 1 | ps-str0m-proto | 0.8.0 | str0m_proto |
-| 2 | ps-str0m-is | 0.11.1 | is |
+| 2 | ps-str0m-is | 0.12.0 | is |
 | 3 | ps-str0m-rust-crypto | 0.2.0 | ps_str0m_rust_crypto |
-| 4 | ps-str0m | 0.25.0 | str0m |
+| 4 | ps-str0m | 0.26.0 | str0m |
 
 `ps-dimpl 0.8.0` is already published and is an external registry dependency.
 The fork's production graph is:
 
 ```text
-ps-str0m 0.25.0
+ps-str0m 0.26.0
 ├── ps-str0m-proto ^0.8.0
 │   └── ps-dimpl ^0.8.0 (dtls feature)
-├── ps-str0m-is ^0.11.1
+├── ps-str0m-is ^0.12.0
 │   └── ps-str0m-proto ^0.8.0
 ├── ps-str0m-rust-crypto ^0.2.0 (default rust-crypto feature)
 │   ├── ps-str0m-proto ^0.8.0

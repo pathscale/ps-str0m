@@ -17,8 +17,8 @@ fn run_mtu_compliance(mtu: usize) -> Result<(), RtcError> {
     init_crypto_default();
 
     let now = Instant::now();
-    let l_rtc = Rtc::builder().set_mtu(mtu..=mtu).build(now);
-    let r_rtc = Rtc::builder().set_mtu(mtu..=mtu).build(now);
+    let l_rtc = Rtc::builder().set_mtu(mtu..=mtu).build(now).unwrap();
+    let r_rtc = Rtc::builder().set_mtu(mtu..=mtu).build(now).unwrap();
 
     let mut l = TestRtc::new_with_rtc(Peer::Left.span(), l_rtc);
     let mut r = TestRtc::new_with_rtc(Peer::Right.span(), r_rtc);

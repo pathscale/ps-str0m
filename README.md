@@ -68,7 +68,7 @@ made by a remote peer, we need these steps to open the connection.
 
 ```rust
 // Instantiate a new Rtc instance.
-let mut rtc = Rtc::new(Instant::now());
+let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
 
 //  Add some ICE candidate such as a locally bound UDP port.
 let addr = "1.2.3.4:5000".parse().unwrap();
@@ -92,7 +92,7 @@ remote ANSWER to start the connection.
 
 ```rust
 // Instantiate a new Rtc instance.
-let mut rtc = Rtc::new(Instant::now());
+let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
 
 // Add some ICE candidate such as a locally bound UDP port.
 let addr = "1.2.3.4:5000".parse().unwrap();
@@ -359,10 +359,17 @@ use str0m::Rtc;
 
 let rtc = Rtc::builder()
     .set_crypto_provider(Arc::new(str0m_rust_crypto::default_provider()))
-    .build(Instant::now());
+    .build(Instant::now())
+    .expect("RTC initialization");
 ```
 
 ## Project status
+
+Random ICE credentials and STUN transaction IDs require a working
+cryptographic entropy source. On `wasm32-unknown-unknown` the
+`ice-entropy-js` feature selects the wasm-bindgen JavaScript backend for ICE;
+it requires a browser or Node.js host with cryptographic randomness. This
+feature does not select a DTLS or SRTP provider.
 
 Str0m was originally developed by Martin Algesten of
 [Lookback][lookback]. We use str0m for a specific use case: str0m as a
@@ -435,7 +442,8 @@ let rtc = Rtc::builder()
     // Enable RTP mode for this Rtc instance.
     // This disables `MediaEvent` and the `Writer::write` API.
     .set_rtp_mode(true)
-    .build(Instant::now());
+    .build(Instant::now())
+    .expect("RTC initialization");
 ```
 
 RTP mode gives us some new API points.

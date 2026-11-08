@@ -83,8 +83,9 @@ fn no_twcc_extension_no_probes() -> Result<(), RtcError> {
         .enable_bwe(Some(Bitrate::kbps(300)))
         .set_extension_map(ExtensionMap::empty())
         .enable_raw_packets(true)
-        .build(now);
-    let (mut l, mut r) = connect_l_r_with_rtc(rtc, Rtc::builder().build(now));
+        .build(now)
+        .unwrap();
+    let (mut l, mut r) = connect_l_r_with_rtc(rtc, Rtc::builder().build(now).unwrap());
     l.direct_api().declare_media("aud".into(), MediaKind::Audio);
     r.direct_api().declare_media("aud".into(), MediaKind::Audio);
     run(&mut l, &mut r, Duration::from_secs(2))?;
@@ -279,8 +280,9 @@ fn video_padding_before_srtp_does_not_spin() -> Result<(), RtcError> {
     let now = Instant::now();
     let mut l = Rtc::builder()
         .enable_bwe(Some(Bitrate::kbps(300)))
-        .build(now);
-    let mut r = Rtc::builder().build(now);
+        .build(now)
+        .unwrap();
+    let mut r = Rtc::builder().build(now).unwrap();
     let mut change = l.sdp_api();
     change.add_media(MediaKind::Video, Direction::SendOnly, None, None, None);
     let (offer, pending) = change.apply().unwrap();
@@ -403,11 +405,13 @@ fn peers(feedback: bool) -> (TestRtc, TestRtc) {
         .set_rtp_mode(true)
         .enable_raw_packets(true)
         .enable_bwe(Some(Bitrate::kbps(300)))
-        .build(now);
+        .build(now)
+        .unwrap();
     let r = Rtc::builder()
         .set_rtp_mode(true)
         .enable_raw_packets(true)
-        .build(now);
+        .build(now)
+        .unwrap();
     let (mut l, mut r) = connect_l_r_with_rtc(l, r);
     l.set_forced_time_advance(Duration::from_micros(100));
     r.set_forced_time_advance(Duration::from_micros(100));

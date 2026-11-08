@@ -389,7 +389,7 @@ fn init_rtc(
     peer: Peer,
     timing: &mut TimingReport,
 ) -> Result<(Rtc, IceCreds, String), RtcError> {
-    let ice_creds = IceCreds::new();
+    let ice_creds = IceCreds::new()?;
 
     let mut rtc_config = RtcConfig::new()
         .set_local_ice_credentials(ice_creds.clone())
@@ -400,7 +400,7 @@ fn init_rtc(
     if let Some(crypto) = peer.crypto_provider() {
         rtc_config = rtc_config.set_crypto_provider(crypto);
     }
-    let mut rtc = rtc_config.build(Instant::now());
+    let mut rtc = rtc_config.build(Instant::now())?;
     timing.rtc_built = Some(Instant::now());
 
     let fingerprint = rtc.direct_api().local_dtls_fingerprint().to_string();

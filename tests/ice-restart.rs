@@ -15,7 +15,7 @@ pub fn ice_restart() -> Result<(), RtcError> {
 
     let mut l = TestRtc::new(Peer::Left);
 
-    let rtc = RtcConfig::new().set_ice_lite(true).build(Instant::now());
+    let rtc = RtcConfig::new().set_ice_lite(true).build(Instant::now())?;
     let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc);
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -45,12 +45,12 @@ pub fn ice_restart() -> Result<(), RtcError> {
     let l_creds = l._local_ice_creds();
     let r_creds = r._local_ice_creds();
 
-    let (offer, pending) = r.span.in_scope(|| {
+    let (offer, pending, staged_creds) = r.span.in_scope(|| -> Result<_, RtcError> {
         let mut change = r.rtc.sdp_api();
-        change.ice_restart(true);
-
-        change.apply().expect("Should be able to apply changes")
-    });
+        let staged_creds = change.ice_restart(true)?;
+        let (offer, pending) = change.apply().expect("Should be able to apply changes");
+        Ok((offer, pending, staged_creds))
+    })?;
     println!("R Offer: {}", offer);
 
     let answer = l.span.in_scope(|| l.rtc.sdp_api().accept_offer(offer))?;
@@ -73,6 +73,7 @@ pub fn ice_restart() -> Result<(), RtcError> {
         progress(&mut l, &mut r)?;
     }
 
+    assert_eq!(r._local_ice_creds(), staged_creds);
     assert_ne!(
         r_creds,
         r._local_ice_creds(),

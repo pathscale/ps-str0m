@@ -8,11 +8,12 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::IceError;
 use crate::Sha1HmacProvider;
 use crate::preference::default_local_preference;
 use crate::stun::{Class as StunClass, Method as StunMethod, StunTiming};
 use crate::stun::{StunMessage, StunPacket, TransId};
-use str0m_proto::{DATAGRAM_MTU_TARGET, DATAGRAM_MTU_WARN, Id, Transmit};
+use str0m_proto::{DATAGRAM_MTU_TARGET, DATAGRAM_MTU_WARN, Transmit};
 use str0m_proto::{NonCryptographicRng, Pii, Protocol};
 
 use crate::candidate::{Candidate, CandidateKind};
@@ -306,15 +307,49 @@ pub enum IceAgentEvent {
 }
 
 impl IceCreds {
-    /// Creates a new instance of `IceCreds` with random values for the username fragment and password.
-    pub fn new() -> Self {
-        // Username Fragment and Password:  Values used to perform connectivity
-        // checks.  The values MUST be unguessable, with at least 128 bits of
-        // random number generator output used to generate the password, and
-        // at least 24 bits of output to generate the username fragment.
-        let ufrag = Id::<16>::random().to_string();
-        let pass = Id::<22>::random().to_string();
-        IceCreds { ufrag, pass }
+    /// Creates ICE credentials using the platform's cryptographic entropy source.
+    ///
+    /// Returns [`IceError::Entropy`] if the source fails.
+    pub fn new() -> Result<Self, IceError> {
+        Self::from_entropy(crate::entropy::fill)
+    }
+
+    fn from_entropy(
+        mut fill: impl FnMut(&mut [u8]) -> Result<(), IceError>,
+    ) -> Result<Self, IceError> {
+        const CHARS: &[u8] = b"abcdefghijklmnopqrstuvxyzABCDEFGHIJKLMNOPQRSTUVXYZ0123456789";
+        const UFRAG_LEN: usize = 16;
+        // At 60 symbols per character, 22 characters provide over 128 bits.
+        const PASS_LEN: usize = 22;
+        // Discard the incomplete range so each character has the same probability.
+        const LIMIT: usize = 256 - 256 % CHARS.len();
+
+        let mut credentials = [0u8; UFRAG_LEN + PASS_LEN];
+        let mut sampled = 0;
+        let mut random = [0u8; 64];
+        while sampled < credentials.len() {
+            fill(&mut random)?;
+            for byte in random {
+                let byte = usize::from(byte);
+                if byte < LIMIT {
+                    credentials[sampled] = CHARS[byte % CHARS.len()];
+                    sampled += 1;
+                    if sampled == credentials.len() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let (ufrag, pass) = credentials.split_at(UFRAG_LEN);
+        Ok(IceCreds {
+            ufrag: std::str::from_utf8(ufrag)
+                .expect("ICE alphabet is ASCII")
+                .to_owned(),
+            pass: std::str::from_utf8(pass)
+                .expect("ICE alphabet is ASCII")
+                .to_owned(),
+        })
     }
 }
 
@@ -1201,7 +1236,20 @@ impl IceAgent {
     ///
     /// Typically, you will want to call [`IceAgent::poll_timeout`] and "wake-up"
     /// the agent once that time is reached.
-    pub fn handle_timeout(&mut self, now: Instant) {
+    ///
+    /// If a due binding check cannot obtain a transaction ID, this returns
+    /// [`IceError::Entropy`] without sending or recording that check. The check
+    /// stays due and can be retried on a later timeout. Other timer work,
+    /// such as pruning expired pairs, may already have been performed.
+    pub fn handle_timeout(&mut self, now: Instant) -> Result<(), IceError> {
+        self.handle_timeout_with(now, TransId::new)
+    }
+
+    fn handle_timeout_with(
+        &mut self,
+        now: Instant,
+        new_transaction: impl FnOnce() -> Result<TransId, IceError>,
+    ) -> Result<(), IceError> {
         // This happens exactly once because evaluate_state() below will
         // switch away from New -> Checking.
         if self.state == IceConnectionState::New {
@@ -1227,7 +1275,7 @@ impl IceAgent {
             if let Some(req) = self.stun_server_queue.pop_front() {
                 debug!("Handle enqueued STUN request: {:?}", Pii(&req));
                 self.stun_server_handle_request(req);
-                return;
+                return Ok(());
             }
         }
 
@@ -1256,7 +1304,7 @@ impl IceAgent {
 
         if self.remote_credentials.is_none() {
             trace!("Stop timeout due to missing remote credentials");
-            return;
+            return Ok(());
         }
 
         if self.ice_lite {
@@ -1271,7 +1319,7 @@ impl IceAgent {
             }
 
             trace!("Stop timeout since ice-lite do no checks");
-            return;
+            return Ok(());
         }
 
         // when do we need to handle the next candidate pair?
@@ -1286,11 +1334,14 @@ impl IceAgent {
             if now >= deadline {
                 let pair = &self.candidate_pairs[idx];
                 trace!("Handle next triggered pair: {:?}", pair);
-                self.stun_client_binding_request(now, idx);
+                let trans_id = new_transaction()?;
+                self.stun_client_binding_request(now, idx, trans_id);
             } else {
                 // trace!("Next triggered pair is in the future: {:?}", deadline - now);
             }
         }
+
+        Ok(())
     }
 
     /// Poll for the next datagram to send.
@@ -1731,7 +1782,7 @@ impl IceAgent {
         self.candidate_pairs.sort();
     }
 
-    fn stun_client_binding_request(&mut self, now: Instant, pair_idx: usize) {
+    fn stun_client_binding_request(&mut self, now: Instant, pair_idx: usize, trans_id: TransId) {
         let (username, password) = self.stun_credentials(false);
 
         let pair = &mut self.candidate_pairs[pair_idx];
@@ -1741,7 +1792,7 @@ impl IceAgent {
         // Only the controlling side sends USE-CANDIDATE.
         let use_candidate = self.controlling && pair.is_nominated();
 
-        let trans_id = pair.new_attempt(now, &self.timing_config, self.controlling);
+        pair.new_attempt(now, &self.timing_config, self.controlling, trans_id);
 
         self.stats.bind_request_sent += 1;
 
@@ -2139,7 +2190,7 @@ mod test {
     }
 
     fn new_test_agent() -> IceAgent {
-        IceAgent::new(IceCreds::new())
+        IceAgent::new(IceCreds::new().expect("ICE credentials"))
     }
 
     fn ipv4_1() -> SocketAddr {
@@ -2580,7 +2631,7 @@ mod test {
         agent.add_remote_candidate(Candidate::host(ipv4_3(), "udp").unwrap());
 
         let now1 = Instant::now();
-        agent.handle_timeout(now1);
+        agent.handle_timeout(now1).unwrap();
         let now2 = agent.poll_timeout().unwrap();
 
         assert!(now2 - now1 == Duration::from_millis(50));
@@ -2591,7 +2642,7 @@ mod test {
         let mut agent = new_test_agent();
 
         let now = Instant::now();
-        agent.handle_timeout(now);
+        agent.handle_timeout(now).unwrap();
 
         while let Some(ev) = agent.poll_event() {
             if let IceAgentEvent::IceConnectionStateChange(s) = ev {
@@ -2599,7 +2650,9 @@ mod test {
             }
         }
 
-        agent.handle_timeout(now + Duration::from_millis(200));
+        agent
+            .handle_timeout(now + Duration::from_millis(200))
+            .unwrap();
         while let Some(ev) = agent.poll_event() {
             if let IceAgentEvent::IceConnectionStateChange(s) = ev {
                 assert!(s != IceConnectionState::Disconnected);
@@ -2607,10 +2660,101 @@ mod test {
         }
     }
 
+    fn entropy_unavailable() -> IceError {
+        IceError::Entropy(std::io::Error::other("injected"))
+    }
+
+    #[test]
+    fn credential_entropy_failure_discards_partial_credentials() {
+        let mut calls = 0;
+        let result = IceCreds::from_entropy(|bytes| {
+            calls += 1;
+            if calls == 1 {
+                bytes.fill(255);
+                bytes[0] = 0;
+                Ok(())
+            } else {
+                Err(entropy_unavailable())
+            }
+        });
+
+        assert_eq!(calls, 2);
+        assert!(matches!(result, Err(IceError::Entropy(_))));
+    }
+
+    #[test]
+    fn credential_entropy_sampling_rejects_out_of_range_bytes() {
+        let mut calls = 0;
+        let creds = IceCreds::from_entropy(|bytes| {
+            calls += 1;
+            // Both 240 and 255 must be skipped rather than mapped into the alphabet.
+            for chunk in bytes.chunks_exact_mut(4) {
+                chunk.copy_from_slice(&[240, 255, 0, 59]);
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(creds.ufrag, "a9".repeat(8));
+        assert_eq!(creds.pass, "a9".repeat(11));
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn binding_check_entropy_failure_leaves_check_due() {
+        let mut agent = IceAgent::new(IceCreds {
+            ufrag: "local".into(),
+            pass: "local-password".into(),
+        });
+        let remote_creds = IceCreds {
+            ufrag: "remote".into(),
+            pass: "remote-password".into(),
+        };
+        let mut remote = Candidate::host(ipv4_3(), "udp").unwrap();
+        remote.set_ufrag(&remote_creds.ufrag);
+        agent.set_remote_credentials(remote_creds.clone());
+        agent
+            .add_local_candidate(Candidate::host(ipv4_1(), "udp").unwrap())
+            .unwrap();
+        agent.add_remote_candidate(remote);
+
+        let now = Instant::now();
+        let result = agent.handle_timeout_with(now, || {
+            TransId::from_entropy(|bytes| {
+                bytes[0] = 0x5a;
+                Err(entropy_unavailable())
+            })
+        });
+        assert!(matches!(result, Err(IceError::Entropy(_))));
+        assert_eq!(agent.candidate_pairs[0].state(), CheckState::Waiting);
+        assert_eq!(agent.stats().bind_request_sent, 0);
+        assert!(agent.poll_transmit().is_none());
+
+        let expected_id = TransId::from_entropy(|bytes| {
+            bytes.fill(0x5a);
+            Ok(())
+        })
+        .unwrap();
+        let retry_at = agent.poll_timeout().unwrap();
+        agent
+            .handle_timeout_with(retry_at, || Ok(expected_id))
+            .unwrap();
+
+        let payload = Vec::from(agent.poll_transmit().unwrap().contents);
+        let request = StunMessage::parse(&payload).unwrap();
+        assert!(request.is_binding_request());
+        assert_eq!(&payload[8..20], &[0x5a; 12]);
+        assert_eq!(request.trans_id(), expected_id);
+        assert_eq!(agent.stats().bind_request_sent, 1);
+
+        let reply = make_authenticated_stun_reply(expected_id, ipv4_4(), &remote_creds.pass);
+        assert!(agent.accepts_message(&StunMessage::parse(&reply).unwrap()));
+    }
+
     #[test]
     fn does_not_accept_response_with_unknown_transaction_id() {
         let mut agent = new_test_agent();
-        let remote_creds = IceCreds::new();
+        let remote_creds = IceCreds::new().expect("ICE credentials");
         let mut remote_candidate = Candidate::host(ipv4_3(), "udp").unwrap();
         remote_candidate.set_ufrag(&remote_creds.ufrag);
 
@@ -2619,15 +2763,15 @@ mod test {
             .add_local_candidate(Candidate::host(ipv4_1(), "udp").unwrap())
             .unwrap();
         agent.add_remote_candidate(remote_candidate);
-        agent.handle_timeout(Instant::now());
+        agent.handle_timeout(Instant::now()).unwrap();
 
         let payload = Vec::from(agent.poll_transmit().unwrap().contents);
         let stun_message = StunMessage::parse(&payload).unwrap();
 
         let valid_reply =
             make_authenticated_stun_reply(stun_message.trans_id(), ipv4_4(), &remote_creds.pass);
-        let fake_reply =
-            make_authenticated_stun_reply(TransId::new(), ipv4_4(), &remote_creds.pass);
+        let unknown_id = TransId::new().unwrap();
+        let fake_reply = make_authenticated_stun_reply(unknown_id, ipv4_4(), &remote_creds.pass);
 
         assert!(!agent.accepts_message(&StunMessage::parse(&fake_reply).unwrap()));
         assert!(agent.accepts_message(&StunMessage::parse(&valid_reply).unwrap()));
@@ -2666,7 +2810,7 @@ mod test {
             .add_local_candidate(Candidate::host(ipv4_1(), "udp").unwrap())
             .unwrap();
 
-        let remote_creds = IceCreds::new();
+        let remote_creds = IceCreds::new().expect("ICE credentials");
         let mut remote_candidate = Candidate::host(ipv4_3(), "udp").unwrap();
         remote_candidate.set_ufrag(&remote_creds.ufrag);
         let prio = remote_candidate.prio();
@@ -2693,11 +2837,11 @@ mod test {
         );
 
         // Should not yet get a response
-        agent.handle_timeout(Instant::now());
+        agent.handle_timeout(Instant::now()).unwrap();
         assert!(agent.poll_transmit().is_none());
 
         agent.set_remote_credentials(remote_creds.clone());
-        agent.handle_timeout(Instant::now());
+        agent.handle_timeout(Instant::now()).unwrap();
 
         // Now should have a response
         let payload = Vec::from(agent.poll_transmit().unwrap().contents);
@@ -2715,7 +2859,7 @@ mod test {
     pub fn ignores_stale_487_after_role_swap() {
         let mut agent = new_test_agent();
         agent.set_controlling(true);
-        let remote_creds = IceCreds::new();
+        let remote_creds = IceCreds::new().expect("ICE credentials");
         agent.set_remote_credentials(remote_creds.clone());
         agent
             .add_local_candidate(Candidate::host(ipv4_1(), "udp").unwrap())
@@ -2725,7 +2869,7 @@ mod test {
         agent.add_remote_candidate(remote_candidate);
 
         // Drive one binding request out — recorded as `controlling=true`.
-        agent.handle_timeout(Instant::now());
+        agent.handle_timeout(Instant::now()).unwrap();
         let req_payload = Vec::from(agent.poll_transmit().unwrap().contents);
         let trans_id = StunMessage::parse(&req_payload).unwrap().trans_id();
 
@@ -2755,7 +2899,7 @@ mod test {
     #[test]
     pub fn discards_packet_from_unknown_candidate() {
         let mut agent = new_test_agent();
-        let remote_creds = IceCreds::new();
+        let remote_creds = IceCreds::new().expect("ICE credentials");
         agent.set_remote_credentials(remote_creds.clone());
 
         let request =
@@ -2777,11 +2921,13 @@ mod test {
     #[test]
     pub fn no_disconnect_missing_local_candidates() {
         let mut agent = new_test_agent();
-        agent.set_remote_credentials(IceCreds::new().clone());
+        agent.set_remote_credentials(IceCreds::new().unwrap());
 
         agent.add_remote_candidate(host("1.1.1.1:1000", "udp"));
-        agent.handle_timeout(Instant::now());
-        agent.handle_timeout(Instant::now() + Duration::from_millis(100));
+        agent.handle_timeout(Instant::now()).unwrap();
+        agent
+            .handle_timeout(Instant::now() + Duration::from_millis(100))
+            .unwrap();
 
         let events = iter::from_fn(|| agent.poll_event()).collect::<Vec<_>>();
         assert!(!events.contains(&IceAgentEvent::IceConnectionStateChange(
@@ -2824,7 +2970,7 @@ mod test {
             .add_local_candidate(Candidate::host(ipv4_1(), "udp").unwrap())
             .unwrap();
 
-        let remote_creds = IceCreds::new();
+        let remote_creds = IceCreds::new().expect("ICE credentials");
         agent.set_remote_credentials(remote_creds.clone());
 
         let mut remote_candidate = Candidate::host(ipv4_3(), "udp").unwrap();
@@ -2869,7 +3015,7 @@ mod test {
         agent
             .add_local_candidate(Candidate::host(ipv4_1(), "udp").unwrap())
             .unwrap();
-        let remote_creds = IceCreds::new();
+        let remote_creds = IceCreds::new().expect("ICE credentials");
         agent.set_remote_credentials(remote_creds.clone());
         // Receive a check before the remote host candidate is signaled.
         let remote = Candidate::host(ipv4_3(), "udp").unwrap();
@@ -2911,7 +3057,7 @@ mod test {
             .add_local_candidate(Candidate::host(ipv4_1(), "udp").unwrap())
             .unwrap();
 
-        let remote_creds = IceCreds::new();
+        let remote_creds = IceCreds::new().expect("ICE credentials");
         agent.set_remote_credentials(remote_creds.clone());
 
         let mut remote_candidate = Candidate::host(ipv4_3(), "udp").unwrap();
@@ -2954,8 +3100,9 @@ mod test {
         prio: u32,
     ) -> Vec<u8> {
         let username = format!("{}:{}", local_creds.ufrag, remote_creds.ufrag);
+        let trans_id = TransId::new().unwrap();
         let binding_req =
-            StunMessage::binding_request(&username, TransId::new(), controlling, 0, prio, false);
+            StunMessage::binding_request(&username, trans_id, controlling, 0, prio, false);
         serialize_stun_msg(binding_req, &local_creds.pass)
     }
 
@@ -2986,7 +3133,7 @@ mod test {
 
     #[test]
     fn set_mtu_updates_mtu() {
-        let mut agent = IceAgent::new(IceCreds::new());
+        let mut agent = new_test_agent();
         assert_eq!(agent.mtu(), DATAGRAM_MTU_TARGET);
         assert_eq!(agent.mtu_warn(), DATAGRAM_MTU_WARN);
 

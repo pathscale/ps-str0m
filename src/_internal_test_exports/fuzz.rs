@@ -152,7 +152,7 @@ pub fn receive(data: &[u8]) -> Option<()> {
     let mut rng = Rng::new(data);
 
     let base = Instant::now();
-    let mut rtc = Rtc::new(base);
+    let mut rtc = Rtc::new(base).ok()?;
 
     let source = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 5000);
     let destination = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(2, 2, 2, 2)), 5001);

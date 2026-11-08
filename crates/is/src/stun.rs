@@ -9,6 +9,8 @@ use crc::{CRC_32_ISO_HDLC, Crc};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 
+use crate::IceError;
+
 pub const DEFAULT_MAX_RETRANSMITS: usize = 9;
 
 #[derive(Debug)] // Purposely not `Clone` / `Copy` to ensure we always use the latest one everywhere.
@@ -86,13 +88,19 @@ impl fmt::Debug for TransId {
 
 #[allow(clippy::new_without_default)]
 impl TransId {
-    /// A new random transaction id.
-    pub fn new() -> Self {
+    /// A new random STUN transaction ID.
+    ///
+    /// Returns [`IceError::Entropy`] if the platform's entropy source fails.
+    pub fn new() -> Result<Self, IceError> {
+        Self::from_entropy(crate::entropy::fill)
+    }
+
+    pub(crate) fn from_entropy(
+        fill: impl FnOnce(&mut [u8]) -> Result<(), IceError>,
+    ) -> Result<Self, IceError> {
         let mut t = [0_u8; 12];
-        for v in &mut t {
-            *v = NonCryptographicRng::u8();
-        }
-        TransId(t)
+        fill(&mut t)?;
+        Ok(TransId(t))
     }
 
     fn from_slice(s: &[u8]) -> Self {
@@ -674,8 +682,6 @@ impl<'a> Attributes<'a> {
 }
 
 use std::{io, str};
-
-use str0m_proto::NonCryptographicRng;
 
 const PAD: [u8; 4] = [0, 0, 0, 0];
 impl<'a> Attributes<'a> {
@@ -1568,7 +1574,7 @@ network_cost: (10, 10) \
             ..Default::default()
         };
         let mut buf = vec![];
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         attrs
             .to_bytes(&mut buf, &trans_id)
             .expect("To serialize attributes");
@@ -1588,7 +1594,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn parse_allocate_request() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let message = StunMessage {
             method: Method::Allocate,
             class: Class::Request,
@@ -1627,7 +1633,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn parse_allocate_response() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let relayed_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 1234));
         let message = StunMessage {
             method: Method::Allocate,
@@ -1660,7 +1666,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn parse_allocate_failure_no_integrity() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let message = StunMessage {
             method: Method::Allocate,
             class: Class::Failure,
@@ -1695,7 +1701,7 @@ network_cost: (10, 10) \
     #[test]
     fn parse_send_request() {
         // Data length of 3 bytes (0xDEADBE) requires 1 byte of padding
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let message = StunMessage {
             method: Method::Send,
             class: Class::Indication,
@@ -1736,7 +1742,7 @@ network_cost: (10, 10) \
     #[test]
     fn parse_data_indication() {
         // Data length of 5 bytes (0xDEADBEEF00) requires 3 bytes of padding
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let message = StunMessage {
             method: Method::Data,
             class: Class::Indication,
@@ -1766,7 +1772,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn parse_refresh_request() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let message = StunMessage {
             method: Method::Refresh,
             class: Class::Request,
@@ -1805,7 +1811,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn parse_create_permission_request() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let peer_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 1), 8080));
         let message = StunMessage {
             method: Method::CreatePermission,
@@ -1845,7 +1851,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn parse_channel_bind_request() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let peer_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 1), 8080));
         let message = StunMessage {
             method: Method::ChannelBind,
@@ -1887,7 +1893,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn build_stun_binding_request_with_attrs() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let username = "test:user";
         let tie_breaker = 1234567890;
         let prio = 9876;
@@ -1913,7 +1919,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn build_stun_binding_success_with_attrs() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 5678));
 
         let message = StunMessageBuilder::new()
@@ -1930,7 +1936,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn build_stun_data_indication_with_attrs() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let data_payload: &[u8] = &[0xca, 0xfe, 0xba, 0xbe];
 
         let message = StunMessageBuilder::new()
@@ -1947,7 +1953,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn decode_xor_buffer_shorter_than_4_is_error() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         for buf in [&[][..], &[0x00][..], &[0x00, 0x01, 0x02][..]] {
             let err = decode_xor(buf, trans_id).expect_err("short buffer must error");
             assert!(
@@ -1959,7 +1965,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn decode_xor_ipv4_family_with_short_ip_buf_is_error() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         // Family = IPv4 (0x01), valid port bytes, but fewer than 4 IP octets.
         for buf in [
             &[0x00, 0x01, 0x11, 0x22][..],
@@ -1976,7 +1982,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn decode_xor_ipv6_family_with_short_ip_buf_is_error() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         // Family = IPv6 (0x02), valid port bytes, but fewer than 16 IP octets.
         let mut buf = vec![0x00, 0x02, 0x11, 0x22];
         buf.extend_from_slice(&[0xaa; 15]);
@@ -1994,7 +2000,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn decode_xor_unknown_family_is_error() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let buf = [0x00, 0x03, 0x11, 0x22, 0xaa, 0xbb, 0xcc, 0xdd];
         let err = decode_xor(&buf, trans_id).expect_err("unknown family must error");
         assert!(matches!(err, StunError::Parse(_)));
@@ -2002,7 +2008,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn encode_decode_xor_ipv4_roundtrip() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 15), 54321));
         let mut buf = [0u8; 20];
         let len = encode_xor(addr, &mut buf, &trans_id);
@@ -2013,7 +2019,7 @@ network_cost: (10, 10) \
 
     #[test]
     fn encode_decode_xor_ipv6_roundtrip() {
-        let trans_id = TransId::new();
+        let trans_id = TransId::new().unwrap();
         let addr = SocketAddr::V6(SocketAddrV6::new(
             Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1234),
             54321,

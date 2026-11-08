@@ -21,11 +21,11 @@ pub fn abs_capture_time_negotiation() -> Result<(), RtcError> {
     let now = std::time::Instant::now();
     let mut l_rtc = Rtc::builder();
     *l_rtc.extension_map() = exts.clone();
-    let mut l = TestRtc::new_with_rtc(Peer::Left.span(), l_rtc.build(now));
+    let mut l = TestRtc::new_with_rtc(Peer::Left.span(), l_rtc.build(now).unwrap());
 
     let mut r_rtc = Rtc::builder();
     *r_rtc.extension_map() = exts.clone();
-    let mut r = TestRtc::new_with_rtc(Peer::Right.span(), r_rtc.build(now));
+    let mut r = TestRtc::new_with_rtc(Peer::Right.span(), r_rtc.build(now).unwrap());
 
     l.set_forced_time_advance(Duration::from_millis(1));
     r.set_forced_time_advance(Duration::from_millis(1));
@@ -106,7 +106,7 @@ pub fn abs_capture_time_sdp_roundtrip() -> Result<(), RtcError> {
     let now = std::time::Instant::now();
     let mut l_rtc = Rtc::builder();
     *l_rtc.extension_map() = exts.clone();
-    let mut l = TestRtc::new_with_rtc(Peer::Left.span(), l_rtc.build(now));
+    let mut l = TestRtc::new_with_rtc(Peer::Left.span(), l_rtc.build(now).unwrap());
 
     let mut r = TestRtc::new(Peer::Right);
 

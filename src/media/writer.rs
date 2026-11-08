@@ -282,7 +282,7 @@ impl<'a> Writer<'a> {
     /// # use std::time::Instant;
     /// # use str0m::Rtc;
     /// # use str0m::media::{Mid, KeyframeRequestKind};
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("Failed to create Rtc from default config");
     ///
     /// // add candidates, do SDP negotiation
     /// let mid: Mid = todo!(); // obtain mid from Event::MediaAdded.

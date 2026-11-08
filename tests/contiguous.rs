@@ -148,7 +148,8 @@ impl Server {
         // past the dropped packet.
         let rtc_r = Rtc::builder()
             .set_reordering_size_video(5)
-            .build(Instant::now());
+            .build(Instant::now())
+            .unwrap();
 
         let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc_r);
 

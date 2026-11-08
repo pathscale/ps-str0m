@@ -8,6 +8,7 @@ use crate::Rtc;
 use crate::RtcError;
 use crate::channel::ChannelId;
 use crate::crypto::Fingerprint;
+use crate::error::IceError;
 use crate::format::CodecConfig;
 use crate::format::PayloadParams;
 use crate::media::{Media, Rids, Simulcast};
@@ -45,7 +46,8 @@ impl<'a> SdpApi<'a> {
     /// sent to the remote peer.
     ///
     /// <b>Note. Pending changes from a previous non-completed [`SdpApi`][super::SdpApi] will be
-    /// considered rolled back when calling this function.</b>
+    /// considered rolled back when calling this function.</b> If a remote ICE restart fails
+    /// because local credentials cannot be generated, pending changes remain valid.
     ///
     /// The incoming SDP is validated in various ways which can cause this call to fail.
     /// Example of such problems would be an SDP without any m-lines, missing `a=fingerprint`
@@ -59,29 +61,38 @@ impl<'a> SdpApi<'a> {
     /// let json_offer: &[u8] = todo!();
     /// let offer: SdpOffer = serde_json::from_slice(json_offer).unwrap();
     ///
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     /// let answer = rtc.sdp_api().accept_offer(offer).unwrap();
     ///
     /// // send json_answer to remote peer.
     /// let json_answer = serde_json::to_vec(&answer).unwrap();
     /// ```
     pub fn accept_offer(self, offer: SdpOffer) -> Result<SdpAnswer, RtcError> {
+        self.accept_offer_with(offer, IceCreds::new)
+    }
+
+    fn accept_offer_with(
+        self,
+        offer: SdpOffer,
+        new_credentials: impl FnOnce() -> Result<IceCreds, IceError>,
+    ) -> Result<SdpAnswer, RtcError> {
         debug!("Accept offer");
 
-        // Invalidate any outstanding PendingOffer.
-        self.rtc.next_change_id();
-
-        if offer.media_lines.is_empty() {
-            return Err(RtcError::RemoteSdp("No m-lines in offer".into()));
-        }
-
-        if self.rtc.ice.ice_lite() && offer.session.ice_lite() {
-            return Err(RtcError::RemoteSdp(
+        let ice_result = if offer.media_lines.is_empty() {
+            Err(RtcError::RemoteSdp("No m-lines in offer".into()))
+        } else if self.rtc.ice.ice_lite() && offer.session.ice_lite() {
+            Err(RtcError::RemoteSdp(
                 "Both peers being ICE-Lite not supported".into(),
-            ));
-        }
+            ))
+        } else {
+            add_ice_details(self.rtc, &offer, None, new_credentials)
+        };
 
-        add_ice_details(self.rtc, &offer, None)?;
+        // Preserve an outstanding offer if we could not begin a remote ICE restart.
+        if !matches!(&ice_result, Err(RtcError::Ice(IceError::Entropy(_)))) {
+            self.rtc.next_change_id();
+        }
+        ice_result?;
 
         if self.rtc.remote_fingerprint.is_none() {
             if let Some(f) = offer.fingerprint() {
@@ -144,7 +155,7 @@ impl<'a> SdpApi<'a> {
     /// # use str0m::Rtc;
     /// # use str0m::media::{MediaKind, Direction};
     /// # use str0m::change::SdpAnswer;
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// let mut changes = rtc.sdp_api();
     /// let mid = changes.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
@@ -175,7 +186,7 @@ impl<'a> SdpApi<'a> {
             ));
         }
 
-        add_ice_details(self.rtc, &answer, Some(&pending))?;
+        add_ice_details(self.rtc, &answer, Some(&pending), IceCreds::new)?;
 
         // Ensure setup=active/passive is corresponding remote and init dtls.
         init_dtls(self.rtc, &answer)?;
@@ -236,7 +247,7 @@ impl<'a> SdpApi<'a> {
     /// # #[cfg(feature = "rust-crypto")] {
     /// # use std::time::Instant;
     /// # use str0m::{Rtc, media::MediaKind, media::Direction};
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// let mut changes = rtc.sdp_api();
     /// assert!(!changes.has_changes());
@@ -264,7 +275,7 @@ impl<'a> SdpApi<'a> {
     /// # #[cfg(feature = "rust-crypto")] {
     /// # use std::time::Instant;
     /// # use str0m::{Rtc, media::MediaKind, media::Direction};
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// let mut changes = rtc.sdp_api();
     ///
@@ -404,7 +415,7 @@ impl<'a> SdpApi<'a> {
     /// # #[cfg(feature = "rust-crypto")] {
     /// # use std::time::Instant;
     /// # use str0m::Rtc;
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// let mut changes = rtc.sdp_api();
     ///
@@ -426,7 +437,7 @@ impl<'a> SdpApi<'a> {
     /// # #[cfg(feature = "rust-crypto")] {
     /// # use std::time::Instant;
     /// # use str0m::{channel::{ChannelConfig, Reliability}, Rtc};
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// let mut changes = rtc.sdp_api();
     ///
@@ -463,16 +474,16 @@ impl<'a> SdpApi<'a> {
     /// candidates must be added via [`Rtc::add_local_candidate`] before connectivity can be
     /// re-established.
     ///
-    /// Returns the new ICE credentials that will be used going forward.
-    pub fn ice_restart(&mut self, keep_local_candidates: bool) -> IceCreds {
+    /// Returns the new ICE credentials that will be used going forward. If
+    /// generation fails, any previously staged restart is retained.
+    pub fn ice_restart(&mut self, keep_local_candidates: bool) -> Result<IceCreds, RtcError> {
+        let new_creds = IceCreds::new()?;
         self.changes
             .retain(|c| !matches!(c, Change::IceRestart(_, _)));
-
-        let new_creds = IceCreds::new();
         self.changes
             .push(Change::IceRestart(new_creds.clone(), keep_local_candidates));
 
-        new_creds
+        Ok(new_creds)
     }
 
     /// Attempt to apply the changes made.
@@ -493,7 +504,7 @@ impl<'a> SdpApi<'a> {
     /// # #[cfg(feature = "rust-crypto")] {
     /// # use std::time::Instant;
     /// # use str0m::Rtc;
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     ///
     /// let changes = rtc.sdp_api();
     /// assert!(changes.apply().is_none());
@@ -535,7 +546,7 @@ impl<'a> SdpApi<'a> {
     /// # use std::time::Instant;
     /// # use str0m::media::{Direction, MediaKind};
     /// # use str0m::Rtc;
-    /// let mut rtc = Rtc::new(Instant::now());
+    /// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
     /// let mut changes = rtc.sdp_api();
     /// changes.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
     /// let (_offer, pending) = changes.apply().unwrap();
@@ -573,7 +584,7 @@ impl<'a> SdpApi<'a> {
 /// # use str0m::Rtc;
 /// # use str0m::media::{MediaKind, Direction};
 /// # use str0m::change::SdpAnswer;
-/// let mut rtc = Rtc::new(Instant::now());
+/// let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
 ///
 /// let mut changes = rtc.sdp_api();
 /// let mid = changes.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
@@ -717,6 +728,7 @@ fn add_ice_details(
     rtc: &mut Rtc,
     sdp: &Sdp,
     pending: Option<&SdpPendingOffer>,
+    new_credentials: impl FnOnce() -> Result<IceCreds, IceError>,
 ) -> Result<(), RtcError> {
     let Some(creds) = sdp.ice_creds() else {
         return Err(RtcError::RemoteSdp("missing a=ice-ufrag/pwd".into()));
@@ -744,11 +756,10 @@ fn add_ice_details(
         } else {
             // The remote OFFER had an ice restart, and we need to respond with
             // new credentials in the ANSWER.
-            (IceCreds::new(), true)
+            (new_credentials()?, true)
         };
 
-        rtc.ice
-            .ice_restart(new_local_creds.clone(), keep_local_candidates);
+        rtc.ice.ice_restart(new_local_creds, keep_local_candidates);
     }
 
     rtc.ice.set_remote_credentials(creds);
@@ -1890,7 +1901,7 @@ mod test {
         crate::init_crypto_default();
 
         let now = Instant::now();
-        let mut rtc = Rtc::new(now);
+        let mut rtc = Rtc::new(now).expect("RTC initialization");
 
         let mut change = rtc.sdp_api();
         change.add_media(MediaKind::Audio, Direction::SendRecv, None, None, None);
@@ -1912,8 +1923,8 @@ mod test {
         crate::init_crypto_default();
 
         let now = Instant::now();
-        let mut offerer = Rtc::new(now);
-        let mut answerer = Rtc::new(now);
+        let mut offerer = Rtc::new(now).expect("RTC initialization");
+        let mut answerer = Rtc::new(now).expect("RTC initialization");
 
         // Offerer creates the offer.
         let mut change = offerer.sdp_api();
@@ -1961,8 +1972,8 @@ mod test {
         crate::init_crypto_default();
 
         let now = Instant::now();
-        let mut rtc1 = Rtc::new(now);
-        let mut rtc2 = Rtc::new(now);
+        let mut rtc1 = Rtc::new(now).expect("RTC initialization");
+        let mut rtc2 = Rtc::new(now).expect("RTC initialization");
 
         let mut change1 = rtc1.sdp_api();
         change1.add_channel("ch1".into());
@@ -1982,10 +1993,52 @@ mod test {
     }
 
     #[test]
+    fn remote_ice_restart_entropy_failure_preserves_pending_offer() {
+        crate::init_crypto_default();
+
+        let now = Instant::now();
+        let mut local = Rtc::new(now).unwrap();
+        let mut remote = Rtc::new(now).unwrap();
+
+        let mut changes = local.sdp_api();
+        changes.add_media(MediaKind::Audio, Direction::SendRecv, None, None, None);
+        let (offer, pending) = changes.apply().unwrap();
+        let answer = remote.sdp_api().accept_offer(offer).unwrap();
+        local.sdp_api().accept_answer(pending, answer).unwrap();
+
+        let mut changes = local.sdp_api();
+        changes.add_media(MediaKind::Video, Direction::SendRecv, None, None, None);
+        let (offer, pending) = changes.apply().unwrap();
+        let answer = remote.sdp_api().accept_offer(offer).unwrap();
+
+        let mut restart = remote.sdp_api();
+        let new_remote_creds = restart.ice_restart(true).unwrap();
+        let (restart_offer, _) = restart.apply().unwrap();
+        let old_local_creds = local.ice.local_credentials().clone();
+        let old_remote_creds = local.ice.remote_credentials().unwrap().clone();
+        let restart_sdp = restart_offer.to_sdp_string();
+
+        let error = local
+            .sdp_api()
+            .accept_offer_with(restart_offer, || {
+                Err(IceError::Entropy(std::io::Error::other("injected")))
+            })
+            .unwrap_err();
+        assert!(matches!(error, RtcError::Ice(IceError::Entropy(_))));
+        assert_eq!(local.ice.local_credentials(), &old_local_creds);
+        assert_eq!(local.ice.remote_credentials(), Some(&old_remote_creds));
+        local.sdp_api().accept_answer(pending, answer).unwrap();
+
+        let retry = SdpOffer::from_sdp_string(&restart_sdp).unwrap();
+        local.sdp_api().accept_offer(retry).unwrap();
+        assert_eq!(local.ice.remote_credentials(), Some(&new_remote_creds));
+    }
+
+    #[test]
     fn sdp_api_merge_works() {
         crate::init_crypto_default();
 
-        let mut rtc = Rtc::new(Instant::now());
+        let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
         let mut changes = rtc.sdp_api();
         changes.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
         let (offer, pending) = changes.apply().unwrap();
@@ -2015,7 +2068,7 @@ mod test {
         crate::init_crypto_default();
 
         let now = Instant::now();
-        let mut rtc = Rtc::new(now);
+        let mut rtc = Rtc::new(now).expect("RTC initialization");
 
         // Build a Changes vector that interleaves non-media entries with media entries.
         // The non-media AddChannel entry must not consume an index slot.
@@ -2084,7 +2137,7 @@ mod test {
     fn sdp_api_merge_stale_media_keeps_original_position() {
         crate::init_crypto_default();
 
-        let mut rtc = Rtc::new(Instant::now());
+        let mut rtc = Rtc::new(Instant::now()).expect("RTC initialization");
 
         // First offer: add audio.  Audio will be at index 0.
         let mut changes = rtc.sdp_api();
@@ -2132,8 +2185,8 @@ mod test {
         crate::init_crypto_default();
 
         let now = Instant::now();
-        let mut rtc1 = Rtc::new(now);
-        let mut rtc2 = Rtc::new(now);
+        let mut rtc1 = Rtc::new(now).expect("RTC initialization");
+        let mut rtc2 = Rtc::new(now).expect("RTC initialization");
 
         // Establish one audio m-line so we can change its direction later.
         let mut changes = rtc1.sdp_api();
@@ -2209,8 +2262,8 @@ mod test {
         for enabled_audio in [1, 2] {
             let expected_audio = enabled_audio == 1;
             let now = Instant::now();
-            let mut local = Rtc::builder().build(now);
-            let mut remote = Rtc::builder().build(now);
+            let mut local = Rtc::builder().build(now).expect("RTC initialization");
+            let mut remote = Rtc::builder().build(now).expect("RTC initialization");
             let mut change = local.sdp_api();
             change.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
             change.add_media(MediaKind::Audio, Direction::SendOnly, None, None, None);
@@ -2292,12 +2345,14 @@ mod test {
             .enable_h264(true)
             .enable_vp8(true)
             .enable_vp9(true)
-            .build(now);
+            .build(now)
+            .expect("RTC initialization");
         let mut rtc2 = Rtc::builder()
             .clear_codecs()
             .enable_vp8(true)
             .enable_h264(true)
-            .build(now);
+            .build(now)
+            .expect("RTC initialization");
 
         let mut change1 = rtc1.sdp_api();
         change1.add_media(MediaKind::Video, Direction::SendOnly, None, None, None);
@@ -2335,8 +2390,8 @@ mod test {
         crate::init_crypto_default();
 
         let now = Instant::now();
-        let mut rtc1 = Rtc::new(now);
-        let mut rtc2 = Rtc::new(now);
+        let mut rtc1 = Rtc::new(now).expect("RTC initialization");
+        let mut rtc2 = Rtc::new(now).expect("RTC initialization");
 
         // Test initial media creation
         let mid = {
@@ -2373,7 +2428,7 @@ mod test {
     fn simulcast_ssrc_allocation() {
         crate::init_crypto_default();
 
-        let mut rtc1 = Rtc::new(Instant::now());
+        let mut rtc1 = Rtc::new(Instant::now()).expect("RTC initialization");
 
         let mut simulcast = Simulcast::new();
 
@@ -2461,7 +2516,7 @@ mod test {
     fn simulcast_attributes() {
         crate::init_crypto_default();
 
-        let mut rtc1 = Rtc::new(Instant::now());
+        let mut rtc1 = Rtc::new(Instant::now()).expect("RTC initialization");
 
         let mut simulcast = Simulcast::new();
 
@@ -2601,7 +2656,7 @@ mod test {
         crate::init_crypto_default();
 
         let now = Instant::now();
-        let mut rtc = Rtc::new(now);
+        let mut rtc = Rtc::new(now).expect("RTC initialization");
 
         // Create an offer with a data channel
         let mut change = rtc.sdp_api();
@@ -2676,8 +2731,8 @@ mod test {
         crate::init_crypto_default();
 
         let now = Instant::now();
-        let mut rtc1 = Rtc::new(now);
-        let mut rtc2 = Rtc::new(now);
+        let mut rtc1 = Rtc::new(now).expect("RTC initialization");
+        let mut rtc2 = Rtc::new(now).expect("RTC initialization");
 
         // Create an offer from rtc1 with a channel
         let mut change1 = rtc1.sdp_api();
@@ -2734,8 +2789,8 @@ mod test {
         crate::init_crypto_default();
 
         let now = Instant::now();
-        let mut rtc1 = Rtc::new(now);
-        let mut rtc2 = Rtc::new(now);
+        let mut rtc1 = Rtc::new(now).expect("RTC initialization");
+        let mut rtc2 = Rtc::new(now).expect("RTC initialization");
 
         let mut change1 = rtc1.sdp_api();
         change1.add_channel("test-channel".into());
@@ -2764,8 +2819,8 @@ mod test {
         crate::init_crypto_default();
 
         let now = Instant::now();
-        let mut rtc1 = Rtc::new(now);
-        let mut rtc2 = Rtc::new(now);
+        let mut rtc1 = Rtc::new(now).expect("RTC initialization");
+        let mut rtc2 = Rtc::new(now).expect("RTC initialization");
 
         let mut change1 = rtc1.sdp_api();
         change1.add_channel("test-channel".into());

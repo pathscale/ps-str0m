@@ -21,11 +21,13 @@ pub fn vla_rtp_mode() -> Result<(), RtcError> {
     let rtc_l = Rtc::builder()
         .set_rtp_mode(true)
         .set_extension(14, vla_ext.clone())
-        .build(now);
+        .build(now)
+        .unwrap();
     let rtc_r = Rtc::builder()
         .set_rtp_mode(true)
         .set_extension(14, vla_ext)
-        .build(now);
+        .build(now)
+        .unwrap();
 
     let (mut l, mut r) = connect_l_r_with_rtc(rtc_l, rtc_r);
 
@@ -124,8 +126,14 @@ pub fn vla_frame_mode() -> Result<(), RtcError> {
     let vla_ext = Extension::with_serializer(VLA_URI, VlaSerializer);
 
     let now = Instant::now();
-    let rtc_l = Rtc::builder().set_extension(14, vla_ext.clone()).build(now);
-    let rtc_r = Rtc::builder().set_extension(14, vla_ext).build(now);
+    let rtc_l = Rtc::builder()
+        .set_extension(14, vla_ext.clone())
+        .build(now)
+        .unwrap();
+    let rtc_r = Rtc::builder()
+        .set_extension(14, vla_ext)
+        .build(now)
+        .unwrap();
 
     let (mut l, mut r) = connect_l_r_with_rtc(rtc_l, rtc_r);
 

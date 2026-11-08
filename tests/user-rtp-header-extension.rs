@@ -74,11 +74,13 @@ pub fn user_rtp_header_extension() -> Result<(), RtcError> {
     let rtc_l = Rtc::builder()
         //
         .set_extension(12, user_ext.clone())
-        .build(now);
+        .build(now)
+        .unwrap();
     let rtc_r = Rtc::builder()
         //
         .set_extension(12, user_ext)
-        .build(now);
+        .build(now)
+        .unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc_l);
     let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc_r);
@@ -216,11 +218,13 @@ pub fn user_rtp_header_extension_two_byte_form() -> Result<(), RtcError> {
     let rtc_l = Rtc::builder()
         //
         .set_extension(12, user_ext.clone())
-        .build(now);
+        .build(now)
+        .unwrap();
     let rtc_r = Rtc::builder()
         //
         .set_extension(12, user_ext)
-        .build(now);
+        .build(now)
+        .unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc_l);
     let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc_r);

@@ -15,8 +15,8 @@ pub fn no_pre_ice_feedback() -> Result<(), RtcError> {
     init_crypto_default();
 
     let now = Instant::now();
-    let l_rtc = Rtc::builder().enable_raw_packets(true).build(now);
-    let r_rtc = Rtc::builder().enable_raw_packets(true).build(now);
+    let l_rtc = Rtc::builder().enable_raw_packets(true).build(now).unwrap();
+    let r_rtc = Rtc::builder().enable_raw_packets(true).build(now).unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), l_rtc);
     let mut r = TestRtc::new_with_rtc(info_span!("R"), r_rtc);

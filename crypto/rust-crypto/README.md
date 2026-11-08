@@ -53,7 +53,8 @@ use str0m::Rtc;
 
 let rtc = Rtc::builder()
     .set_crypto_provider(Arc::new(default_provider()))
-    .build(Instant::now());
+    .build(Instant::now())
+    .expect("RTC initialization");
 ```
 
 The `ps-str0m` root package also exposes this provider through its

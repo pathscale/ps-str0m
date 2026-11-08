@@ -47,7 +47,7 @@ fn config_reordering_size_custom() -> Result<(), RtcError> {
     );
 
     // Build and verify the Rtc works with custom config
-    let rtc = config.build(Instant::now());
+    let rtc = config.build(Instant::now()).unwrap();
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc);
     let mut r = TestRtc::new(Peer::Right);
 
@@ -133,13 +133,15 @@ fn config_raw_packets_enabled() -> Result<(), RtcError> {
 
     let rtc = RtcConfig::new()
         .enable_raw_packets(true)
-        .build(Instant::now());
+        .build(Instant::now())
+        .unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc);
 
     let rtc_r = RtcConfig::new()
         .enable_raw_packets(true)
-        .build(Instant::now());
+        .build(Instant::now())
+        .unwrap();
     let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc_r);
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -201,13 +203,15 @@ fn config_stats_interval_custom() -> Result<(), RtcError> {
     let stats_interval = Duration::from_secs(1);
     let rtc = RtcConfig::new()
         .set_stats_interval(Some(stats_interval))
-        .build(Instant::now());
+        .build(Instant::now())
+        .unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc);
 
     let rtc_r = RtcConfig::new()
         .set_stats_interval(Some(stats_interval))
-        .build(Instant::now());
+        .build(Instant::now())
+        .unwrap();
     let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc_r);
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -309,13 +313,15 @@ fn config_stats_disabled() -> Result<(), RtcError> {
 
     let rtc = RtcConfig::new()
         .set_stats_interval(None)
-        .build(Instant::now());
+        .build(Instant::now())
+        .unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc);
 
     let rtc_r = RtcConfig::new()
         .set_stats_interval(None)
-        .build(Instant::now());
+        .build(Instant::now())
+        .unwrap();
     let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc_r);
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());
@@ -382,12 +388,14 @@ fn config_fingerprint_verification_disabled() -> Result<(), RtcError> {
     let rtc_l = RtcConfig::new()
         .set_fingerprint_verification(false)
         .set_rtp_mode(true)
-        .build(Instant::now());
+        .build(Instant::now())
+        .unwrap();
 
     let rtc_r = RtcConfig::new()
         .set_fingerprint_verification(false)
         .set_rtp_mode(true)
-        .build(Instant::now());
+        .build(Instant::now())
+        .unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc_l);
     let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc_r);
@@ -458,8 +466,8 @@ fn config_clone_multiple_instances() -> Result<(), RtcError> {
         .set_reordering_size_video(40);
 
     // Clone the config and create multiple instances
-    let rtc1 = config.clone().build(Instant::now());
-    let rtc2 = config.build(Instant::now());
+    let rtc1 = config.clone().build(Instant::now()).unwrap();
+    let rtc2 = config.build(Instant::now()).unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc1);
     let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc2);
@@ -527,7 +535,7 @@ fn config_send_buffer_sizes() -> Result<(), RtcError> {
     );
 
     // Build and verify the Rtc works with custom config
-    let rtc = config.build(Instant::now());
+    let rtc = config.build(Instant::now()).unwrap();
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc);
     let mut r = TestRtc::new(Peer::Right);
 

@@ -217,7 +217,8 @@ fn ice_custom_credentials() -> Result<(), RtcError> {
 
     let rtc = RtcConfig::new()
         .set_local_ice_credentials(custom_creds.clone())
-        .build(Instant::now());
+        .build(Instant::now())
+        .unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc);
     let mut r = TestRtc::new(Peer::Right);
@@ -280,7 +281,7 @@ fn ice_stun_timeout_initial_rto() -> Result<(), RtcError> {
     let mut config = RtcConfig::new();
     config.set_initial_stun_rto(custom_rto);
     let start = Instant::now();
-    let rtc = config.build(start);
+    let rtc = config.build(start).unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc);
     let mut r = TestRtc::new(Peer::Right);
@@ -370,7 +371,7 @@ fn ice_stun_timeout_max_rto() -> Result<(), RtcError> {
     config.set_initial_stun_rto(initial_rto);
     config.set_max_stun_rto(max_rto);
     let start = Instant::now();
-    let rtc = config.build(start);
+    let rtc = config.build(start).unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc);
     let mut r = TestRtc::new(Peer::Right);
@@ -468,7 +469,7 @@ fn ice_stun_max_retransmits() -> Result<(), RtcError> {
     config.set_initial_stun_rto(Duration::from_millis(20));
     config.set_max_stun_rto(Duration::from_millis(40));
     let start = Instant::now();
-    let rtc = config.build(start);
+    let rtc = config.build(start).unwrap();
 
     let mut l = TestRtc::new_with_rtc(info_span!("L"), rtc);
     let mut r = TestRtc::new(Peer::Right);
@@ -546,7 +547,10 @@ fn ice_lite_mode() -> Result<(), RtcError> {
     init_crypto_default();
 
     let mut l = TestRtc::new(Peer::Left);
-    let rtc = RtcConfig::new().set_ice_lite(true).build(Instant::now());
+    let rtc = RtcConfig::new()
+        .set_ice_lite(true)
+        .build(Instant::now())
+        .unwrap();
     let mut r = TestRtc::new_with_rtc(info_span!("R"), rtc);
 
     l.add_host_candidate((Ipv4Addr::new(1, 1, 1, 1), 1000).into());

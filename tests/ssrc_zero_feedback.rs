@@ -17,7 +17,8 @@ fn receiver(ssrc: u32, now: Instant) -> Rtc {
         .set_stats_interval(None)
         .set_rtcp_report_interval_audio(Duration::from_secs(1))
         .set_rtcp_report_interval_video(Duration::from_secs(1))
-        .build(now);
+        .build(now)
+        .unwrap();
 
     let mid: Mid = "audio".into();
     let mut direct = rtc.direct_api();

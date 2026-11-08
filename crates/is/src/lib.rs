@@ -9,7 +9,7 @@
 //!
 //! This crate implements the ICE agent -- the state machine that drives
 //! candidate pairing, connectivity checks, and nomination -- without
-//! performing any I/O itself.
+//! performing any network I/O itself.
 //!
 //! # Sans-IO
 //!
@@ -17,7 +17,7 @@
 //! a socket. Instead you drive it in a loop:
 //!
 //! 1. `poll_timeout()` -- when to wake up next.
-//! 2. `handle_timeout(now)` -- advance timers.
+//! 2. `handle_timeout(now)` -- advance timers and handle any entropy error.
 //! 3. `poll_transmit()` -- STUN packets to send.
 //! 4. `handle_packet(now, pkt)` -- feed incoming STUN.
 //! 5. `poll_event()` -- state changes and nominations.
@@ -31,7 +31,7 @@
 //! use is::{IceAgent, IceCreds, Candidate};
 //!
 //! // Create an agent with random credentials.
-//! let mut agent = IceAgent::new(IceCreds::new());
+//! let mut agent = IceAgent::new(IceCreds::new().expect("ICE credentials"));
 //!
 //! // Tell the agent about a local socket.
 //! let addr = "192.168.1.100:5000".parse().unwrap();
@@ -111,6 +111,8 @@ pub use preference::default_local_preference;
 mod error;
 pub use error::IceError;
 pub use error::StunError;
+
+mod entropy;
 
 pub mod stun;
 
@@ -389,7 +391,7 @@ pub(crate) mod test {
         a1.agent.invalidate_candidate(&c1);
 
         let timeout = a2.poll_timeout().unwrap();
-        a2.handle_timeout(timeout);
+        a2.handle_timeout(timeout).unwrap();
         let transmit = a2.poll_transmit().unwrap();
 
         assert!(a1.poll_transmit().is_none());
@@ -615,7 +617,8 @@ pub(crate) mod test {
         a1.add_host_candidate("1.1.1.1:1000");
         a1.add_remote_candidate(host("2.2.2.2:2000", "udp"));
 
-        a1.span.in_scope(|| a1.agent.handle_timeout(a1.time));
+        a1.span
+            .in_scope(|| a1.agent.handle_timeout(a1.time).unwrap());
 
         assert!(!a1.state().is_disconnected());
     }
@@ -1297,7 +1300,7 @@ pub(crate) mod test {
             let now = Instant::now();
             TestAgent {
                 start_time: now,
-                agent: IceAgent::new(IceCreds::new()),
+                agent: IceAgent::new(IceCreds::new().expect("ICE credentials")),
                 span,
                 events: vec![],
                 progress_count: 0,
@@ -1424,7 +1427,7 @@ pub(crate) mod test {
             if let Some((source, destination)) = transform(trans.source, trans.destination, f, t) {
                 if f.drop_sent_packets {
                     // drop packet
-                    t.span.in_scope(|| t.agent.handle_timeout(t.time));
+                    t.span.in_scope(|| t.agent.handle_timeout(t.time).unwrap());
                 } else {
                     if source != trans.source {
                         f.span.in_scope(|| {
@@ -1450,10 +1453,10 @@ pub(crate) mod test {
                 tracing::debug!(from = %trans.source, to = %trans.destination, "NAT: Dropping packet");
 
                 // drop packet
-                t.span.in_scope(|| t.agent.handle_timeout(t.time));
+                t.span.in_scope(|| t.agent.handle_timeout(t.time).unwrap());
             }
         } else {
-            t.span.in_scope(|| t.agent.handle_timeout(t.time));
+            t.span.in_scope(|| t.agent.handle_timeout(t.time).unwrap());
         }
 
         let time = t.time;
@@ -1481,7 +1484,7 @@ pub(crate) mod test {
     // exact Attempt window being tested.
     fn progress_without_network(from: &mut TestAgent, to: &mut TestAgent) {
         let now = from.time;
-        from.handle_timeout(now);
+        from.handle_timeout(now).unwrap();
         drain_manual_test_events(to, from);
         from.advance_time();
         to.advance_time();

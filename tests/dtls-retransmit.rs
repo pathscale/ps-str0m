@@ -35,8 +35,8 @@ fn dtls_retransmit_emitted_in_same_poll_pass() {
     init_crypto_default();
 
     let now = Instant::now();
-    let mut l = TestRtc::new_with_rtc(info_span!("L"), Rtc::new(now));
-    let mut r = TestRtc::new_with_rtc(info_span!("R"), Rtc::new(now));
+    let mut l = TestRtc::new_with_rtc(info_span!("L"), Rtc::new(now).unwrap());
+    let mut r = TestRtc::new_with_rtc(info_span!("R"), Rtc::new(now).unwrap());
 
     let host_l = Candidate::host((Ipv4Addr::new(1, 1, 1, 1), 1000).into(), "udp").unwrap();
     let host_r = Candidate::host((Ipv4Addr::new(2, 2, 2, 2), 2000).into(), "udp").unwrap();
@@ -151,8 +151,14 @@ fn terminal_dtls_timeout_does_not_rearm_expired_deadline_for(
     init_crypto_default();
 
     let now = Instant::now();
-    let left_rtc = Rtc::builder().set_dtls_version(client_dtls).build(now);
-    let right_rtc = Rtc::builder().set_dtls_version(server_dtls).build(now);
+    let left_rtc = Rtc::builder()
+        .set_dtls_version(client_dtls)
+        .build(now)
+        .unwrap();
+    let right_rtc = Rtc::builder()
+        .set_dtls_version(server_dtls)
+        .build(now)
+        .unwrap();
     let mut left = TestRtc::new_with_rtc(info_span!("L"), left_rtc);
     let mut right = TestRtc::new_with_rtc(info_span!("R"), right_rtc);
 
@@ -274,8 +280,8 @@ fn dtls_handshake_completes_under_packet_loss() {
     init_crypto_default();
 
     let now = Instant::now();
-    let mut l = TestRtc::new_with_rtc(info_span!("L"), Rtc::new(now));
-    let mut r = TestRtc::new_with_rtc(info_span!("R"), Rtc::new(now));
+    let mut l = TestRtc::new_with_rtc(info_span!("L"), Rtc::new(now).unwrap());
+    let mut r = TestRtc::new_with_rtc(info_span!("R"), Rtc::new(now).unwrap());
 
     // 30% random loss in both directions from the very first packet.
     let lossy = NetemConfig::new()

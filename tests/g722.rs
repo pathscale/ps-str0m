@@ -124,7 +124,7 @@ fn rtp_mode_g722(peer: Peer, now: Instant) -> Rtc {
     if let Some(crypto) = peer.crypto_provider() {
         b = b.set_crypto_provider(crypto);
     }
-    b.build(now)
+    b.build(now).unwrap()
 }
 
 /// In RTP mode the user works directly with raw RTP timestamps, which for G722
@@ -232,13 +232,15 @@ pub fn g722_sample_send_to_rtp_receive() -> Result<(), RtcError> {
     let rtc_l = Rtc::builder()
         .clear_codecs()
         .enable_g722(true, false)
-        .build(now);
+        .build(now)
+        .unwrap();
     // R reads raw RTP packets (8 kHz wire clock).
     let rtc_r = Rtc::builder()
         .set_rtp_mode(true)
         .clear_codecs()
         .enable_g722(true, false)
-        .build(now);
+        .build(now)
+        .unwrap();
 
     let (mut l, mut r) = connect_l_r_with_rtc(rtc_l, rtc_r);
 
@@ -329,13 +331,15 @@ pub fn g722_rtp_send_to_sample_receive() -> Result<(), RtcError> {
         .set_rtp_mode(true)
         .clear_codecs()
         .enable_g722(true, false)
-        .build(now);
+        .build(now)
+        .unwrap();
     // R reads frames via the sample API (16 kHz media time), no reorder hold-back.
     let rtc_r = Rtc::builder()
         .set_reordering_size_audio(0)
         .clear_codecs()
         .enable_g722(true, false)
-        .build(now);
+        .build(now)
+        .unwrap();
 
     let (mut l, mut r) = connect_l_r_with_rtc(rtc_l, rtc_r);
 
