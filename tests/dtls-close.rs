@@ -4,9 +4,10 @@
 use std::net::Ipv4Addr;
 use std::time::Instant;
 
+use str0m::config::DtlsVersion;
 use str0m::media::MediaKind;
 use str0m::rtp::rtcp::Rtcp;
-use str0m::rtp::{RawPacket, Ssrc};
+use str0m::rtp::{RawPacket, RtpWrite, Ssrc};
 use str0m::{Candidate, Event, Input, Output, Rtc, RtcConfig, RtcError};
 use tracing::info_span;
 
@@ -115,6 +116,46 @@ fn deliver_until_closed_event(
     }
 
     panic!("expected remote closed event");
+}
+
+#[test]
+fn dtls_exported_keys_protect_rtp_in_both_directions() {
+    for version in [DtlsVersion::Dtls12, DtlsVersion::Dtls13] {
+        let (mut l, mut r) =
+            direct_pair_with_config(|c| c.set_dtls_version(version).set_rtp_mode(true));
+        let mid = "aud".into();
+        let l_ssrc: Ssrc = 42.into();
+        let r_ssrc: Ssrc = 43.into();
+        let l_payload = [0x11, 0x22, 0x33];
+        let r_payload = [0x44, 0x55, 0x66];
+
+        for (peer, tx_ssrc, rx_ssrc, payload) in [
+            (&mut l, l_ssrc, r_ssrc, l_payload),
+            (&mut r, r_ssrc, l_ssrc, r_payload),
+        ] {
+            let pt = peer.params_opus().pt();
+            let at = peer.last;
+            let mut direct = peer.direct_api();
+            direct.declare_media(mid, MediaKind::Audio);
+            direct.expect_stream_rx(rx_ssrc, None, mid, None);
+            direct
+                .declare_stream_tx(tx_ssrc, None, mid, None)
+                .write_rtp(RtpWrite::new(pt, 1.into(), 960, at, payload));
+        }
+
+        let received = |peer: &TestRtc, ssrc: Ssrc, payload: &[u8]| {
+            peer.events.iter().any(|(_, event)| {
+                matches!(event, Event::RtpPacket(packet)
+                    if packet.header.ssrc == ssrc && packet.payload.as_ref() == payload)
+            })
+        };
+        progress_until(
+            &mut l,
+            &mut r,
+            "authenticated RTP in both directions",
+            |l, r| received(l, r_ssrc, &r_payload) && received(r, l_ssrc, &l_payload),
+        );
+    }
 }
 
 #[test]

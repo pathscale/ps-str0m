@@ -1,6 +1,6 @@
 [package]
 name = "ps-str0m"
-version = "0.26.1"
+version = "0.26.2"
 authors = ["Martin Algesten <martin@algesten.se>", "Hugo Tunius <h@tunius.se>", "Davide Bertola <dade@dadeb.it>"]
 description = "WebRTC library in Sans-IO style; fork of str0m with pure-Rust ChaCha20-Poly1305 DTLS and SRTP"
 license = "MIT OR Apache-2.0"
@@ -27,7 +27,7 @@ exclude = ["crates/fuzz"]
 
 [workspace.dependencies]
 # Internal crates
-str0m = { package = "ps-str0m", version = "^0.26.1", path = ".", default-features = false }
+str0m = { package = "ps-str0m", version = "^0.26.2", path = ".", default-features = false }
 str0m-proto = { package = "ps-str0m-proto", version = "^0.8.2", path = "crates/proto", default-features = false }
 is = { package = "ps-str0m-is", version = "^0.12.0", path = "crates/is", default-features = false }
 str0m-rust-crypto = { package = "ps-str0m-rust-crypto", version = "^0.2.1", path = "crypto/rust-crypto" }
@@ -40,7 +40,7 @@ combine = "4.6.6"
 subtle = "2.0.0"
 arrayvec = "0.7.6"
 serde = { version = "1.0.152", features = ["derive"] }
-dimpl = { package = "ps-dimpl", version = "^0.8.0", default-features = false }
+dimpl = { package = "ps-dimpl", version = "^0.8.1", default-features = false }
 drv = { version = "0.4.3" }
 time = "0.3"
 base64ct = "1"
