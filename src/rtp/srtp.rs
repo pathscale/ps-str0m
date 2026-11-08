@@ -1,6 +1,8 @@
 use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
+use zeroize::{Zeroize, Zeroizing};
+
 use crate::crypto::dtls::{KeyingMaterial, SrtpProfile};
 use crate::crypto::{AeadChacha20Poly1305, AeadChacha20Poly1305Cipher};
 use crate::crypto::{CryptoProvider, SrtpProvider};
@@ -49,7 +51,9 @@ impl SrtpContext {
         match profile {
             SrtpProfile::CHACHA20_POLY1305 => {
                 let key = SrtpKey::new(mat, left);
-                let (rtp, rtcp) = Derived::aead_chacha20_poly1305(crypto.srtp_provider, &key);
+                let mut scratch = [[0; AeadChacha20Poly1305::KEY_LEN]; 2];
+                let (rtp, rtcp) =
+                    Derived::aead_chacha20_poly1305(crypto.srtp_provider, &key, &mut scratch);
 
                 SrtpContext {
                     rtp,
@@ -96,7 +100,7 @@ impl SrtpContext {
 
         let Derived { salt, enc, .. } = &mut self.rtp;
         let roc = (srtp_index >> 16) as u32;
-        let iv = AeadChacha20Poly1305::rtp_iv(*salt, *header.ssrc, roc, header.sequence_number);
+        let iv = AeadChacha20Poly1305::rtp_iv_ref(salt, *header.ssrc, roc, header.sequence_number);
         let aad = &buf[..hlen];
 
         // Input and output lengths for encryption:
@@ -126,7 +130,7 @@ impl SrtpContext {
 
         let Derived { salt, dec, .. } = &mut self.rtp;
         let roc: u32 = (srtp_index >> 16) as u32;
-        let iv = AeadChacha20Poly1305::rtp_iv(*salt, *header.ssrc, roc, header.sequence_number);
+        let iv = AeadChacha20Poly1305::rtp_iv_ref(salt, *header.ssrc, roc, header.sequence_number);
 
         let (aad, input) = buf.split_at(header.header_len);
         // Input and output lengths for decryption:
@@ -169,7 +173,7 @@ impl SrtpContext {
         }
 
         let Derived { salt, enc, .. } = &mut self.rtcp;
-        let iv = AeadChacha20Poly1305::rtcp_iv(*salt, ssrc, srtcp_index);
+        let iv = AeadChacha20Poly1305::rtcp_iv_ref(salt, ssrc, srtcp_index);
 
         let mut aad = [0; AeadChacha20Poly1305::RTCP_AAD_LEN];
         aad[..8].copy_from_slice(&buf[..8]);
@@ -253,7 +257,7 @@ impl SrtpContext {
         };
 
         let Derived { salt, dec, .. } = &mut self.rtcp;
-        let iv = AeadChacha20Poly1305::rtcp_iv(*salt, ssrc, srtcp_index);
+        let iv = AeadChacha20Poly1305::rtcp_iv_ref(salt, ssrc, srtcp_index);
         // Declared out here for lifetime purposes, only used in the first branch of the if.
         let mut encrypted_aad = [0; AeadChacha20Poly1305::RTCP_AAD_LEN];
         let mut aads: [&[u8]; 2] = [&[], &[]];
@@ -299,28 +303,14 @@ impl SrtpContext {
 }
 
 /// Master key and salt for one direction, from the DTLS-SRTP keying material.
-struct SrtpKey {
-    master: [u8; AeadChacha20Poly1305::KEY_LEN],
-    salt: [u8; AeadChacha20Poly1305::SALT_LEN],
+struct SrtpKey<'a> {
+    master: &'a [u8],
+    salt: &'a [u8],
 }
 
-impl fmt::Debug for SrtpKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SrtpKey").finish_non_exhaustive()
-    }
-}
-
-impl Drop for SrtpKey {
-    fn drop(&mut self) {
-        use zeroize::Zeroize;
-        self.master.zeroize();
-        self.salt.zeroize();
-    }
-}
-
-impl SrtpKey {
-    pub fn new(mat: &KeyingMaterial, left: bool) -> Self {
-        // layout in SrtpKeyMaterial is [key_input, key_output, salt_input, salt_output]
+impl<'a> SrtpKey<'a> {
+    fn new(mat: &'a KeyingMaterial, left: bool) -> Self {
+        // Layout: [left key, right key, left salt, right salt].
         const ML: usize = AeadChacha20Poly1305::KEY_LEN;
         const SL: usize = AeadChacha20Poly1305::SALT_LEN;
 
@@ -330,16 +320,11 @@ impl SrtpKey {
             "The KeyingMaterial provided to SrtpKey::new must be ML * 2 + SL * 2 in length"
         );
 
-        // offset 0, offset 1
-        let (o0, o1) = if left { (0, 0) } else { (ML, SL) };
-
-        let mut master = [0; ML];
-        let mut salt = [0; SL];
-
-        master.copy_from_slice(&mat[o0..(o0 + ML)]);
-        salt.copy_from_slice(&mat[(ML + ML + o1)..(ML + ML + o1 + SL)]);
-
-        SrtpKey { master, salt }
+        let (master_offset, salt_offset) = if left { (0, 2 * ML) } else { (ML, 2 * ML + SL) };
+        Self {
+            master: &mat[master_offset..master_offset + ML],
+            salt: &mat[salt_offset..salt_offset + SL],
+        }
     }
 
     /// One session key or salt: HKDF-SHA256 over the master key, salted with the master salt, with
@@ -348,39 +333,53 @@ impl SrtpKey {
         let mut info = [0_u8; KDF_INFO.len() + 1];
         info[..KDF_INFO.len()].copy_from_slice(KDF_INFO);
         info[KDF_INFO.len()] = label;
-        crypto.hkdf_sha256(&self.salt, &self.master, &info, out);
+        crypto.hkdf_sha256(self.salt, self.master, &info, out);
     }
 }
 
 /// Encryption/decryption derived from the SrtpKey.
 struct Derived {
-    salt: [u8; AeadChacha20Poly1305::SALT_LEN],
+    salt: Zeroizing<[u8; AeadChacha20Poly1305::SALT_LEN]>,
     enc: Box<dyn AeadChacha20Poly1305Cipher>,
     dec: Box<dyn AeadChacha20Poly1305Cipher>,
 }
 
 impl Derived {
-    fn aead_chacha20_poly1305(crypto: &dyn SrtpProvider, srtp_key: &SrtpKey) -> (Derived, Derived) {
-        let mut rtp_key = [0; AeadChacha20Poly1305::KEY_LEN];
-        srtp_key.derive(crypto, LABEL_RTP_ENCRYPTION, &mut rtp_key);
-        let mut rtp_salt = [0; AeadChacha20Poly1305::SALT_LEN];
-        srtp_key.derive(crypto, LABEL_RTP_SALT, &mut rtp_salt);
+    fn aead_chacha20_poly1305(
+        crypto: &dyn SrtpProvider,
+        srtp_key: &SrtpKey<'_>,
+        scratch: &mut [[u8; AeadChacha20Poly1305::KEY_LEN]; 2],
+    ) -> (Self, Self) {
+        // Guard both KDF output buffers before giving them to the provider.
+        struct WipeKeys<'a>(&'a mut [[u8; AeadChacha20Poly1305::KEY_LEN]; 2]);
+        impl Drop for WipeKeys<'_> {
+            fn drop(&mut self) {
+                for key in &mut *self.0 {
+                    key.zeroize();
+                }
+            }
+        }
 
-        let mut rtcp_key = [0; AeadChacha20Poly1305::KEY_LEN];
-        srtp_key.derive(crypto, LABEL_RTCP_ENCRYPTION, &mut rtcp_key);
-        let mut rtcp_salt = [0; AeadChacha20Poly1305::SALT_LEN];
-        srtp_key.derive(crypto, LABEL_RTCP_SALT, &mut rtcp_salt);
+        let keys = WipeKeys(scratch);
+        let [rtp_key, rtcp_key] = &mut *keys.0;
+        srtp_key.derive(crypto, LABEL_RTP_ENCRYPTION, rtp_key);
+        let mut rtp_salt = Zeroizing::new([0; AeadChacha20Poly1305::SALT_LEN]);
+        srtp_key.derive(crypto, LABEL_RTP_SALT, &mut rtp_salt[..]);
+
+        srtp_key.derive(crypto, LABEL_RTCP_ENCRYPTION, rtcp_key);
+        let mut rtcp_salt = Zeroizing::new([0; AeadChacha20Poly1305::SALT_LEN]);
+        srtp_key.derive(crypto, LABEL_RTCP_SALT, &mut rtcp_salt[..]);
 
         let cipher = crypto.aead_chacha20_poly1305();
-        let rtp = Derived {
+        let rtp = Self {
             salt: rtp_salt,
-            enc: cipher.create_cipher(rtp_key, true),
-            dec: cipher.create_cipher(rtp_key, false),
+            enc: cipher.create_cipher_from_key(rtp_key, true),
+            dec: cipher.create_cipher_from_key(rtp_key, false),
         };
-        let rtcp = Derived {
+        let rtcp = Self {
             salt: rtcp_salt,
-            enc: cipher.create_cipher(rtcp_key, true),
-            dec: cipher.create_cipher(rtcp_key, false),
+            enc: cipher.create_cipher_from_key(rtcp_key, true),
+            dec: cipher.create_cipher_from_key(rtcp_key, false),
         };
 
         (rtp, rtcp)
@@ -408,12 +407,67 @@ fn error_details(header: &RtpHeader, srtp_index: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SRTCP_INDEX_LIMIT, SrtpContext};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Mutex;
+
+    use super::{AeadChacha20Poly1305, Derived, SRTCP_INDEX_LIMIT, SrtpContext, SrtpKey};
     use crate::crypto::{
+        SrtpProvider, SupportedAeadChacha20Poly1305,
         dtls::{KeyingMaterial, SrtpProfile},
         test_default_provider,
     };
     use crate::RtcError;
+
+    #[test]
+    fn derived_key_scratch_is_wiped_on_return_and_unwind() {
+        #[derive(Debug)]
+        struct PanicAtFactory<'a> {
+            provider: &'a dyn SrtpProvider,
+            derivations: Mutex<Vec<(u8, usize)>>,
+        }
+
+        impl SrtpProvider for PanicAtFactory<'_> {
+            fn aead_chacha20_poly1305(&self) -> &'static dyn SupportedAeadChacha20Poly1305 {
+                assert_eq!(
+                    self.derivations.lock().unwrap().as_slice(),
+                    &[(0, 32), (2, 12), (3, 32), (5, 12)]
+                );
+                panic!("simulated cipher factory panic");
+            }
+
+            fn hkdf_sha256(&self, salt: &[u8], ikm: &[u8], info: &[u8], out: &mut [u8]) {
+                self.provider.hkdf_sha256(salt, ikm, info, out);
+                assert!(out.iter().any(|&byte| byte != 0));
+                self.derivations.lock().unwrap().push((
+                    *info.last().expect("SRTP KDF label"),
+                    out.len(),
+                ));
+            }
+        }
+
+        let profile = SrtpProfile::CHACHA20_POLY1305;
+        let material = KeyingMaterial::new(&vec![0x42; profile.keying_material_len()]);
+        let master = SrtpKey::new(&material, true);
+        let crypto = test_default_provider().srtp_provider;
+        let mut scratch = [[0xa5; AeadChacha20Poly1305::KEY_LEN]; 2];
+
+        let _derived = Derived::aead_chacha20_poly1305(crypto, &master, &mut scratch);
+        assert!(scratch.iter().flatten().all(|&byte| byte == 0));
+
+        let failing = PanicAtFactory {
+            provider: crypto,
+            derivations: Mutex::new(Vec::new()),
+        };
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            Derived::aead_chacha20_poly1305(&failing, &master, &mut scratch);
+        }));
+        let panic = result.expect_err("cipher factory should panic");
+        assert_eq!(
+            panic.downcast_ref::<&str>(),
+            Some(&"simulated cipher factory panic")
+        );
+        assert!(scratch.iter().flatten().all(|&byte| byte == 0));
+    }
 
     #[test]
     fn final_srtcp_index_is_sent_once_without_wrapping() {

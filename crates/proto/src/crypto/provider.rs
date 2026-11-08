@@ -206,6 +206,19 @@ pub trait DtlsInstance: CryptoSafe {
 pub trait SupportedAeadChacha20Poly1305: CryptoSafe {
     /// Create a cipher instance with the given key.
     fn create_cipher(&self, key: [u8; 32], encrypt: bool) -> Box<dyn AeadChacha20Poly1305Cipher>;
+
+    /// Create a cipher instance from a borrowed key.
+    ///
+    /// The default implementation passes an owned copy to `create_cipher`. Providers can
+    /// override this method to initialize the cipher directly from the borrowed key.
+    /// The provider owns cleanup of any key material it copies or retains.
+    fn create_cipher_from_key(
+        &self,
+        key: &[u8; 32],
+        encrypt: bool,
+    ) -> Box<dyn AeadChacha20Poly1305Cipher> {
+        self.create_cipher(*key, encrypt)
+    }
 }
 
 // ============================================================================
@@ -260,6 +273,11 @@ impl AeadChacha20Poly1305 {
 
     /// Compute RTP IV (RFC 7714 Section 8.1 layout).
     pub fn rtp_iv(salt: [u8; 12], ssrc: u32, roc: u32, seq: u16) -> [u8; 12] {
+        Self::rtp_iv_ref(&salt, ssrc, roc, seq)
+    }
+
+    /// Compute RTP IV from a borrowed salt.
+    pub fn rtp_iv_ref(salt: &[u8; 12], ssrc: u32, roc: u32, seq: u16) -> [u8; 12] {
         let mut iv = [0; 12];
 
         iv[2..6].copy_from_slice(&ssrc.to_be_bytes());
@@ -275,6 +293,11 @@ impl AeadChacha20Poly1305 {
 
     /// Compute RTCP IV (RFC 7714 Section 9.1 layout).
     pub fn rtcp_iv(salt: [u8; 12], ssrc: u32, srtcp_index: u32) -> [u8; 12] {
+        Self::rtcp_iv_ref(&salt, ssrc, srtcp_index)
+    }
+
+    /// Compute RTCP IV from a borrowed salt.
+    pub fn rtcp_iv_ref(salt: &[u8; 12], ssrc: u32, srtcp_index: u32) -> [u8; 12] {
         let mut iv = [0; 12];
 
         iv[2..6].copy_from_slice(&ssrc.to_be_bytes());

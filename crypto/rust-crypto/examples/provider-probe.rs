@@ -16,9 +16,10 @@ fn main() {
 
     verify_certificate_and_key(&certificate);
     verify_certificate_fingerprint(&provider, &certificate);
+    verify_srtp_kdf(&provider);
     verify_srtp_authentication(&provider);
 
-    println!("provider-probe: certificate, fingerprint, and SRTP authentication checks passed");
+    println!("provider-probe: certificate, fingerprint, and SRTP checks passed");
 }
 
 fn verify_certificate_and_key(certificate: &DtlsCert) {
@@ -66,6 +67,24 @@ fn verify_certificate_fingerprint(provider: &CryptoProvider, certificate: &DtlsC
     );
 }
 
+fn verify_srtp_kdf(provider: &CryptoProvider) {
+    // RFC 5869 test case 1 spans two HKDF-SHA256 expand blocks.
+    let salt = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    let info = [0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9];
+    let mut out = [0; 42];
+    provider
+        .srtp_provider
+        .hkdf_sha256(&salt, &[0x0b; 22], &info, &mut out);
+    assert_eq!(
+        out,
+        [
+            0x3c, 0xb2, 0x5f, 0x25, 0xfa, 0xac, 0xd5, 0x7a, 0x90, 0x43, 0x4f, 0x64, 0xd0, 0x36,
+            0x2f, 0x2a, 0x2d, 0x2d, 0x0a, 0x90, 0xcf, 0x1a, 0x5a, 0x4c, 0x5d, 0xb0, 0x2d, 0x56,
+            0xec, 0xc4, 0xc5, 0xbf, 0x34, 0x00, 0x72, 0x08, 0xd5, 0xb8, 0x87, 0x18, 0x58, 0x65,
+        ]
+    );
+}
+
 fn verify_srtp_authentication(provider: &CryptoProvider) {
     let key = [0x11; 32];
     let iv = [0x22; 12];
@@ -76,7 +95,7 @@ fn verify_srtp_authentication(provider: &CryptoProvider) {
     let mut encryptor = provider
         .srtp_provider
         .aead_chacha20_poly1305()
-        .create_cipher(key, true);
+        .create_cipher_from_key(&key, true);
     encryptor
         .encrypt(&iv, aad, plaintext, &mut protected)
         .expect("provider failed to encrypt an SRTP AEAD payload");
@@ -85,7 +104,7 @@ fn verify_srtp_authentication(provider: &CryptoProvider) {
     let mut decryptor = provider
         .srtp_provider
         .aead_chacha20_poly1305()
-        .create_cipher(key, false);
+        .create_cipher_from_key(&key, false);
     let recovered_len = decryptor
         .decrypt(&iv, &[aad], &protected, &mut recovered)
         .expect("provider failed to authenticate and decrypt an SRTP AEAD payload");
@@ -98,7 +117,7 @@ fn verify_srtp_authentication(provider: &CryptoProvider) {
     let mut rejecting_decryptor = provider
         .srtp_provider
         .aead_chacha20_poly1305()
-        .create_cipher(key, false);
+        .create_cipher_from_key(&key, false);
     assert!(
         rejecting_decryptor
             .decrypt(&iv, &[aad], &tampered, &mut sink)

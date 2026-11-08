@@ -1,9 +1,10 @@
 //! SRTP cipher implementations using RustCrypto: ChaCha20-Poly1305 only.
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
-use chacha20poly1305::{ChaCha20Poly1305, Nonce, Tag};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};
 use hkdf::Hkdf;
 use sha2::Sha256;
+use zeroize::Zeroize;
 
 use str0m_proto::crypto::CryptoError;
 use str0m_proto::crypto::{AeadChacha20Poly1305, AeadChacha20Poly1305Cipher};
@@ -101,9 +102,20 @@ impl std::fmt::Debug for RustCryptoSupportedAeadChacha20Poly1305 {
 }
 
 impl SupportedAeadChacha20Poly1305 for RustCryptoSupportedAeadChacha20Poly1305 {
-    fn create_cipher(&self, key: [u8; 32], _encrypt: bool) -> Box<dyn AeadChacha20Poly1305Cipher> {
+    fn create_cipher(&self, mut key: [u8; 32], _encrypt: bool) -> Box<dyn AeadChacha20Poly1305Cipher> {
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+        // Wipe the legacy by-value argument before allocating the cipher box.
+        key.zeroize();
+        Box::new(RustCryptoAeadChacha20Poly1305Cipher { cipher })
+    }
+
+    fn create_cipher_from_key(
+        &self,
+        key: &[u8; 32],
+        _encrypt: bool,
+    ) -> Box<dyn AeadChacha20Poly1305Cipher> {
         Box::new(RustCryptoAeadChacha20Poly1305Cipher {
-            cipher: ChaCha20Poly1305::new(&key.into()),
+            cipher: ChaCha20Poly1305::new(Key::from_slice(key)),
         })
     }
 }
@@ -126,7 +138,9 @@ impl SrtpProvider for RustCryptoSrtpProvider {
     }
 
     fn hkdf_sha256(&self, salt: &[u8], ikm: &[u8], info: &[u8], out: &mut [u8]) {
-        Hkdf::<Sha256>::new(Some(salt), ikm)
+        let (mut prk, hkdf) = Hkdf::<Sha256>::extract(Some(salt), ikm);
+        prk.as_mut_slice().zeroize();
+        hkdf
             .expand(info, out)
             // A session key or salt is far below HKDF-SHA256's 8160-byte output limit.
             .expect("HKDF-SHA256 output length");
