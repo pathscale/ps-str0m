@@ -40,11 +40,16 @@ jobs:
     steps:
       - name: Require master
         run: test "$GITHUB_REF" = refs/heads/master
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Require runner rustup
+        shell: bash
+        run: command -v rustup
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-bin: false
 
       - name: Publish ps-str0m-proto
         if: inputs.publish_proto
