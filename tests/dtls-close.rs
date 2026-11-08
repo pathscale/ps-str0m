@@ -118,6 +118,17 @@ fn deliver_until_closed_event(
 }
 
 #[test]
+fn force_disconnect_releases_srtp_contexts() {
+    let (mut l, _r) = direct_pair();
+    assert!(l.rtc.is_connected());
+
+    l.rtc.disconnect();
+
+    assert!(!l.rtc.is_alive());
+    assert!(!l.rtc.is_connected());
+}
+
+#[test]
 fn local_dtls_close_drains_before_rtc_closes() -> Result<(), RtcError> {
     let (mut l, mut r) = direct_pair();
 
@@ -136,6 +147,7 @@ fn local_dtls_close_drains_before_rtc_closes() -> Result<(), RtcError> {
     });
 
     assert!(!l.rtc.is_alive());
+    assert!(!l.rtc.is_connected());
 
     Ok(())
 }
@@ -157,6 +169,7 @@ fn remote_dtls_close_auto_replies_before_rtc_closes() -> Result<(), RtcError> {
     });
 
     assert!(!r.rtc.is_alive());
+    assert!(!r.rtc.is_connected());
 
     Ok(())
 }

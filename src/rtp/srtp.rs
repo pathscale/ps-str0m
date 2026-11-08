@@ -3,11 +3,11 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::RtcError;
 use crate::crypto::dtls::{KeyingMaterial, SrtpProfile};
 use crate::crypto::{AeadChacha20Poly1305, AeadChacha20Poly1305Cipher};
 use crate::crypto::{CryptoProvider, SrtpProvider};
 use crate::io::DATAGRAM_MAX_PACKET_SIZE;
-use crate::RtcError;
 
 use super::header::RtpHeader;
 
@@ -34,6 +34,9 @@ const SRTCP_INDEX_LEN: usize = 4;
 const SRTCP_INDEX_LIMIT: u32 = 1 << 31;
 const SRTCP_HEADER_LEN: usize = 8;
 const MAX_TAG_LEN: usize = AeadChacha20Poly1305::TAG_LEN;
+// Packet IVs are the session salt XORed with public packet fields. Fill them directly
+// in zeroizing buffers so these salt equivalents are wiped after use.
+const IV_LEN: usize = AeadChacha20Poly1305::IV_LEN;
 pub const SRTCP_OVERHEAD: usize = MAX_TAG_LEN + SRTCP_INDEX_LEN;
 pub const SRTP_OVERHEAD: usize = MAX_TAG_LEN;
 
@@ -100,7 +103,8 @@ impl SrtpContext {
 
         let Derived { salt, enc, .. } = &mut self.rtp;
         let roc = (srtp_index >> 16) as u32;
-        let iv = AeadChacha20Poly1305::rtp_iv_ref(salt, *header.ssrc, roc, header.sequence_number);
+        let mut iv = Zeroizing::new([0; IV_LEN]);
+        AeadChacha20Poly1305::rtp_iv_into(salt, *header.ssrc, roc, header.sequence_number, &mut iv);
         let aad = &buf[..hlen];
 
         // Input and output lengths for encryption:
@@ -130,7 +134,8 @@ impl SrtpContext {
 
         let Derived { salt, dec, .. } = &mut self.rtp;
         let roc: u32 = (srtp_index >> 16) as u32;
-        let iv = AeadChacha20Poly1305::rtp_iv_ref(salt, *header.ssrc, roc, header.sequence_number);
+        let mut iv = Zeroizing::new([0; IV_LEN]);
+        AeadChacha20Poly1305::rtp_iv_into(salt, *header.ssrc, roc, header.sequence_number, &mut iv);
 
         let (aad, input) = buf.split_at(header.header_len);
         // Input and output lengths for decryption:
@@ -173,7 +178,8 @@ impl SrtpContext {
         }
 
         let Derived { salt, enc, .. } = &mut self.rtcp;
-        let iv = AeadChacha20Poly1305::rtcp_iv_ref(salt, ssrc, srtcp_index);
+        let mut iv = Zeroizing::new([0; IV_LEN]);
+        AeadChacha20Poly1305::rtcp_iv_into(salt, ssrc, srtcp_index, &mut iv);
 
         let mut aad = [0; AeadChacha20Poly1305::RTCP_AAD_LEN];
         aad[..8].copy_from_slice(&buf[..8]);
@@ -257,7 +263,8 @@ impl SrtpContext {
         };
 
         let Derived { salt, dec, .. } = &mut self.rtcp;
-        let iv = AeadChacha20Poly1305::rtcp_iv_ref(salt, ssrc, srtcp_index);
+        let mut iv = Zeroizing::new([0; IV_LEN]);
+        AeadChacha20Poly1305::rtcp_iv_into(salt, ssrc, srtcp_index, &mut iv);
         // Declared out here for lifetime purposes, only used in the first branch of the if.
         let mut encrypted_aad = [0; AeadChacha20Poly1305::RTCP_AAD_LEN];
         let mut aads: [&[u8]; 2] = [&[], &[]];
@@ -339,7 +346,8 @@ impl<'a> SrtpKey<'a> {
 
 /// Encryption/decryption derived from the SrtpKey.
 struct Derived {
-    salt: Zeroizing<[u8; AeadChacha20Poly1305::SALT_LEN]>,
+    // Derive into the final allocation: moving Derived moves only the salt pointer.
+    salt: Box<Zeroizing<[u8; AeadChacha20Poly1305::SALT_LEN]>>,
     enc: Box<dyn AeadChacha20Poly1305Cipher>,
     dec: Box<dyn AeadChacha20Poly1305Cipher>,
 }
@@ -363,11 +371,11 @@ impl Derived {
         let keys = WipeKeys(scratch);
         let [rtp_key, rtcp_key] = &mut *keys.0;
         srtp_key.derive(crypto, LABEL_RTP_ENCRYPTION, rtp_key);
-        let mut rtp_salt = Zeroizing::new([0; AeadChacha20Poly1305::SALT_LEN]);
+        let mut rtp_salt = Box::new(Zeroizing::new([0; AeadChacha20Poly1305::SALT_LEN]));
         srtp_key.derive(crypto, LABEL_RTP_SALT, &mut rtp_salt[..]);
 
         srtp_key.derive(crypto, LABEL_RTCP_ENCRYPTION, rtcp_key);
-        let mut rtcp_salt = Zeroizing::new([0; AeadChacha20Poly1305::SALT_LEN]);
+        let mut rtcp_salt = Box::new(Zeroizing::new([0; AeadChacha20Poly1305::SALT_LEN]));
         srtp_key.derive(crypto, LABEL_RTCP_SALT, &mut rtcp_salt[..]);
 
         let cipher = crypto.aead_chacha20_poly1305();
@@ -411,12 +419,12 @@ mod tests {
     use std::sync::Mutex;
 
     use super::{AeadChacha20Poly1305, Derived, SRTCP_INDEX_LIMIT, SrtpContext, SrtpKey};
+    use crate::RtcError;
     use crate::crypto::{
         SrtpProvider, SupportedAeadChacha20Poly1305,
         dtls::{KeyingMaterial, SrtpProfile},
         test_default_provider,
     };
-    use crate::RtcError;
 
     #[test]
     fn derived_key_scratch_is_wiped_on_return_and_unwind() {
@@ -438,10 +446,10 @@ mod tests {
             fn hkdf_sha256(&self, salt: &[u8], ikm: &[u8], info: &[u8], out: &mut [u8]) {
                 self.provider.hkdf_sha256(salt, ikm, info, out);
                 assert!(out.iter().any(|&byte| byte != 0));
-                self.derivations.lock().unwrap().push((
-                    *info.last().expect("SRTP KDF label"),
-                    out.len(),
-                ));
+                self.derivations
+                    .lock()
+                    .unwrap()
+                    .push((*info.last().expect("SRTP KDF label"), out.len()));
             }
         }
 
@@ -488,7 +496,10 @@ mod tests {
                 .expect("four-byte SRTCP index"),
         );
         assert_eq!(trailer, u32::MAX);
-        assert_eq!(rx.unprotect_rtcp(&protected).as_deref(), Some(rtcp.as_slice()));
+        assert_eq!(
+            rx.unprotect_rtcp(&protected).as_deref(),
+            Some(rtcp.as_slice())
+        );
         assert_eq!(tx.srtcp_index, SRTCP_INDEX_LIMIT);
 
         assert!(matches!(

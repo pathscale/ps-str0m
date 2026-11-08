@@ -1,6 +1,6 @@
 [package]
 name = "ps-str0m-proto"
-version = "0.8.1"
+version = "0.8.2"
 authors = ["Martin Algesten <martin@algesten.se>"]
 description = "Internal protocol and crypto traits for ps-str0m. Not intended for direct use."
 license = "MIT OR Apache-2.0"
@@ -31,4 +31,5 @@ base64ct.workspace = true
 subtle.workspace = true
 fastrand.workspace = true
 serde.workspace = true
+zeroize = "1"
 

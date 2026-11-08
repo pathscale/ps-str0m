@@ -279,6 +279,10 @@ impl Session {
         self.srtp_tx = Some(SrtpContext::new(crypto, srtp_profile, &mat, left));
     }
 
+    pub(crate) fn clear_srtp_contexts(&mut self) {
+        drop((self.srtp_rx.take(), self.srtp_tx.take()));
+    }
+
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), RtcError> {
         if self.rtp_closing {
             return Ok(());
