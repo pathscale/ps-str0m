@@ -12,6 +12,8 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use zeroize::Zeroize;
+
 use crate::crypto::dtls::*;
 use crate::crypto::error::CryptoError;
 
@@ -272,14 +274,22 @@ impl AeadChacha20Poly1305 {
     pub const IV_LEN: usize = 12;
 
     /// Compute RTP IV (RFC 7714 Section 8.1 layout).
-    pub fn rtp_iv(salt: [u8; 12], ssrc: u32, roc: u32, seq: u16) -> [u8; 12] {
-        Self::rtp_iv_ref(&salt, ssrc, roc, seq)
+    pub fn rtp_iv(mut salt: [u8; 12], ssrc: u32, roc: u32, seq: u16) -> [u8; 12] {
+        let iv = Self::rtp_iv_ref(&salt, ssrc, roc, seq);
+        salt.zeroize();
+        iv
     }
 
     /// Compute RTP IV from a borrowed salt.
     pub fn rtp_iv_ref(salt: &[u8; 12], ssrc: u32, roc: u32, seq: u16) -> [u8; 12] {
         let mut iv = [0; 12];
+        Self::rtp_iv_into(salt, ssrc, roc, seq, &mut iv);
+        iv
+    }
 
+    /// Write the RTP IV into caller-owned storage.
+    pub fn rtp_iv_into(salt: &[u8; 12], ssrc: u32, roc: u32, seq: u16, iv: &mut [u8; 12]) {
+        *iv = [0; 12];
         iv[2..6].copy_from_slice(&ssrc.to_be_bytes());
         iv[6..10].copy_from_slice(&roc.to_be_bytes());
         iv[10..12].copy_from_slice(&seq.to_be_bytes());
@@ -287,26 +297,30 @@ impl AeadChacha20Poly1305 {
         for i in 0..12 {
             iv[i] ^= salt[i];
         }
-
-        iv
     }
 
     /// Compute RTCP IV (RFC 7714 Section 9.1 layout).
-    pub fn rtcp_iv(salt: [u8; 12], ssrc: u32, srtcp_index: u32) -> [u8; 12] {
-        Self::rtcp_iv_ref(&salt, ssrc, srtcp_index)
+    pub fn rtcp_iv(mut salt: [u8; 12], ssrc: u32, srtcp_index: u32) -> [u8; 12] {
+        let iv = Self::rtcp_iv_ref(&salt, ssrc, srtcp_index);
+        salt.zeroize();
+        iv
     }
 
     /// Compute RTCP IV from a borrowed salt.
     pub fn rtcp_iv_ref(salt: &[u8; 12], ssrc: u32, srtcp_index: u32) -> [u8; 12] {
         let mut iv = [0; 12];
+        Self::rtcp_iv_into(salt, ssrc, srtcp_index, &mut iv);
+        iv
+    }
 
+    /// Write the RTCP IV into caller-owned storage.
+    pub fn rtcp_iv_into(salt: &[u8; 12], ssrc: u32, srtcp_index: u32, iv: &mut [u8; 12]) {
+        *iv = [0; 12];
         iv[2..6].copy_from_slice(&ssrc.to_be_bytes());
         iv[8..12].copy_from_slice(&srtcp_index.to_be_bytes());
 
         for i in 0..12 {
             iv[i] ^= salt[i];
         }
-
-        iv
     }
 }

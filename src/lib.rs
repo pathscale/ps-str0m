@@ -1338,7 +1338,7 @@ impl Rtc {
     /// Force disconnects the instance making [`Rtc::is_alive()`] return `false`.
     ///
     /// This makes [`Rtc::poll_output`] and [`Rtc::handle_input`] go inert and not
-    /// produce anymore network output or events.
+    /// produce anymore network output or events. It also releases the SRTP contexts.
     ///
     /// ```
     /// # use std::time::Instant;
@@ -1350,6 +1350,7 @@ impl Rtc {
     /// ```
     pub fn disconnect(&mut self) {
         self.state = RtcState::Closed;
+        self.session.clear_srtp_contexts();
     }
 
     /// Add a local ICE candidate. Local candidates are socket addresses the `Rtc` instance
@@ -1908,7 +1909,7 @@ impl Rtc {
         };
 
         if self.state == RtcState::Closing && self.close_drain_complete() {
-            self.state = RtcState::Closed;
+            self.disconnect();
             self.last_timeout_reason = Reason::NotHappening;
             return Ok(Some(Output::Timeout(not_happening())));
         }
