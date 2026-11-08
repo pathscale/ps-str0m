@@ -1,6 +1,6 @@
 [package]
 name = "ps-str0m-rust-crypto"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Martin Algesten <martin@algesten.se>"]
 description = "Pure RustCrypto DTLS and SRTP provider for ps-str0m: ChaCha20-Poly1305 only"
 license = "MIT OR Apache-2.0"
@@ -24,4 +24,5 @@ rand_core = { version = "0.6", default-features = false, features = ["getrandom"
 sha1 = "0.10"
 sha2 = { version = "0.10", features = ["oid"] }
 x509-cert = { version = "0.2.5", default-features = false, features = ["builder"] }
+zeroize = "1"
 

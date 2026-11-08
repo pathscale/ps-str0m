@@ -8,9 +8,9 @@ ICE timeouts or creating STUN transaction IDs.
 
 | Publish order | Package | Version | Library import |
 | --- | --- | --- | --- |
-| 1 | ps-str0m-proto | 0.8.0 | str0m_proto |
+| 1 | ps-str0m-proto | 0.8.1 | str0m_proto |
 | 2 | ps-str0m-is | 0.12.0 | is |
-| 3 | ps-str0m-rust-crypto | 0.2.0 | ps_str0m_rust_crypto |
+| 3 | ps-str0m-rust-crypto | 0.2.1 | ps_str0m_rust_crypto |
 | 4 | ps-str0m | 0.26.0 | str0m |
 
 `ps-dimpl 0.8.0` is already published and is an external registry dependency.
@@ -18,12 +18,12 @@ The fork's production graph is:
 
 ```text
 ps-str0m 0.26.0
-├── ps-str0m-proto ^0.8.0
+├── ps-str0m-proto ^0.8.1
 │   └── ps-dimpl ^0.8.0 (dtls feature)
 ├── ps-str0m-is ^0.12.0
-│   └── ps-str0m-proto ^0.8.0
-├── ps-str0m-rust-crypto ^0.2.0 (default rust-crypto feature)
-│   ├── ps-str0m-proto ^0.8.0
+│   └── ps-str0m-proto ^0.8.1
+├── ps-str0m-rust-crypto ^0.2.1 (default rust-crypto feature)
+│   ├── ps-str0m-proto ^0.8.1
 │   └── ps-dimpl ^0.8.0 (rust-crypto, default-features = false)
 └── external Rust dependencies
 ```
