@@ -8,22 +8,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
+      RUSTUP_TOOLCHAIN: nightly-2026-10-15
       # Run each fuzz target for 10 minutes
       FUZZ_TIMEOUT: 600 # Seconds
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
 
-      - name: Install Rust and cargo-fuzz
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-          components: rust-src
-      - run: rustup install nightly
-      - run: rustup default nightly
-      - run: cargo install cargo-fuzz
+      - name: Install Rust nightly
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rust-src --no-self-update
+      - name: Install cargo-fuzz
+        run: cargo install --locked --version '=0.13.2' --registry crates-io cargo-fuzz
 
       - name: Build fuzz targets
         run: cargo fuzz build --fuzz-dir crates/fuzz

@@ -20,26 +20,31 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
+      - name: Require runner rustup
+        shell: bash
+        run: command -v rustup
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         id: toolchain
         with:
           toolchain: ${{ matrix.rust }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-bin: false
       - name: Test with rust-crypto
         run: cargo +${{steps.toolchain.outputs.name}} test --no-default-features --features rust-crypto
 
   snowflake:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
           fetch-depth: 0
       - name: Martin's snowflake formatting rules
-        uses: algesten/snowflake@v1.1.0
+        uses: algesten/snowflake@4b9bc5dec73d95b18e19f23e3a2ca6db7003bdd0 # v1.1.0
         with:
           check_diff: true
           line_width_rules: "CHANGELOG.md:120;c_cpp_properties.json:160;Cargo.toml:150;README.md:180;README.tpl:180;*.md:110;*.rs:110;*.toml:110;*.lock:200;*.svg:1000;*.txt:9999;DEFAULT=110"
@@ -47,29 +52,39 @@ jobs:
   pii:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
+      - name: Require runner rustup
+        shell: bash
+        run: command -v rustup
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         id: toolchain
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-bin: false
       - name: Test pii
         run: cargo +${{steps.toolchain.outputs.name}} test --test pii --features pii
 
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
+      - name: Require runner rustup
+        shell: bash
+        run: command -v rustup
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         id: toolchain
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-bin: false
       - name: fmt
         run: cargo +${{steps.toolchain.outputs.name}} fmt --all -- --check
       - name: clippy (default features)
@@ -83,16 +98,16 @@ jobs:
 
   fuzz-build:
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-10-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly
-          components: rust-src
+      - name: Install Rust nightly
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rust-src --no-self-update
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install --locked --version '=0.13.2' --registry crates-io cargo-fuzz
       - name: Build fuzz targets
         run: cargo fuzz build --fuzz-dir crates/fuzz
 
@@ -111,15 +126,20 @@ jobs:
             os: ubuntu-latest
     runs-on: ${{ matrix.dir.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
+      - name: Require runner rustup
+        shell: bash
+        run: command -v rustup
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         id: toolchain
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-bin: false
       - name: fmt
         if: matrix.rust == 'stable'
         run: cargo +${{steps.toolchain.outputs.name}} fmt --manifest-path ${{ matrix.dir.name }}/Cargo.toml -- --check
@@ -132,11 +152,17 @@ jobs:
   cargo-deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          arguments: --all-features
+      - name: Check dependencies with cargo-deny
+        shell: bash
+        run: |
+          release=cargo-deny-0.20.2-x86_64-unknown-linux-musl
+          archive="$RUNNER_TEMP/$release.tar.gz"
+          curl --proto '=https' --proto-redir '=https' --fail --silent --show-error --location --retry 3 \
+            --output "$archive" "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/$release.tar.gz"
+          printf '%s  %s\n' '9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f' "$archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP" "$release/cargo-deny"
+          "$RUNNER_TEMP/$release/cargo-deny" --log-level warn --manifest-path ./Cargo.toml --all-features check
 
