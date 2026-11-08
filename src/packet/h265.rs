@@ -1,6 +1,7 @@
 #![allow(clippy::all)]
 #![allow(unused)]
 
+use super::h26x::{Aggregation, Reassembly, aggregation_size, checked_add};
 use super::{CodecExtra, Depacketizer, PacketError, Packetizer};
 use arrayvec::ArrayVec;
 use tracing::warn;
@@ -1397,229 +1398,218 @@ impl Default for H265Payload {
     }
 }
 
-/// Depacketizes H265 RTP packets.
+/// Depacketizes H265 RTP packets into Annex-B NAL units.
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct H265Depacketizer {
     payload: H265Payload,
+    skip_payload_snapshot: bool,
     might_need_donl: bool,
-    fu_buffer: Option<Vec<u8>>,
+    reassembly: Reassembly<2>,
 }
 
 impl H265Depacketizer {
-    /// with_donl can be called to specify whether or not DONL might be parsed.
-    /// DONL may need to be parsed if `sprop-max-don-diff` is greater than 0 on the RTP stream.
+    pub(super) fn for_buffer() -> Self {
+        Self {
+            skip_payload_snapshot: true,
+            ..Default::default()
+        }
+    }
+
+    /// The parsed payload of the most recent successful depacketization.
+    pub fn payload(&self) -> &H265Payload {
+        &self.payload
+    }
+
+    fn remember_payload(&mut self, packet: &[u8], header: H265NALUHeader) -> Result<(), PacketError> {
+        if self.skip_payload_snapshot {
+            return Ok(());
+        }
+        self.payload = if header.is_paci_packet() {
+            let mut decoded = H265PACIPacket::default();
+            decoded.depacketize(packet)?;
+            H265Payload::H265PACIPacket(decoded)
+        } else if header.is_fragmentation_unit() {
+            let mut decoded = H265FragmentationUnitPacket::default();
+            decoded.with_donl(self.might_need_donl);
+            decoded.depacketize(packet)?;
+            H265Payload::H265FragmentationUnitPacket(decoded)
+        } else if header.is_aggregation_packet() {
+            let mut decoded = H265AggregationPacket::default();
+            decoded.with_donl(self.might_need_donl);
+            decoded.depacketize(packet)?;
+            H265Payload::H265AggregationPacket(decoded)
+        } else {
+            let mut decoded = H265SingleNALUnitPacket::default();
+            decoded.with_donl(self.might_need_donl);
+            decoded.depacketize(packet)?;
+            H265Payload::H265SingleNALUnitPacket(decoded)
+        };
+        Ok(())
+    }
+
+    /// Enable DONL parsing when the RTP stream signals sprop-max-don-diff > 0.
     pub fn with_donl(&mut self, value: bool) {
+        self.reset_reassembly();
         self.might_need_donl = value;
     }
 
-    /// payload returns the populated payload.
-    /// Must be casted to one of:
-    /// - H265SingleNALUnitPacket
-    /// - H265FragmentationUnitPacket
-    /// - H265AggregationPacket
-    /// - H265PACIPacket
-    pub fn payload(&self) -> &H265Payload {
-        &self.payload
+    /// Set the maximum Annex-B bytes in an access unit, including any pending
+    /// NAL header and its four-byte prefix. The default is 8 MiB.
+    /// Pass the same output vector for all packets in the access unit.
+    /// Output already in that vector counts toward the limit.
+    /// Changing the limit discards any unfinished fragmented NAL.
+    pub fn set_reassembly_limit(&mut self, limit: usize) {
+        self.reassembly.set_limit(limit);
+    }
+
+    /// Discard any unfinished fragmented NAL. Call this on RTP discontinuity
+    /// or when abandoning an access unit; this API has no RTP sequence or time.
+    pub fn reset_reassembly(&mut self) {
+        self.reassembly.reset();
+    }
+
+    pub(super) fn reassembly_limit(&self) -> usize {
+        self.reassembly.limit()
+    }
+
+    /// Finish an access unit and discard any unfinished NAL, returning an
+    /// error if a fragment sequence did not end.
+    pub fn finish_reassembly(&mut self) -> Result<(), PacketError> {
+        self.reassembly.finish()
+    }
+
+    fn depacketize_packet(
+        &mut self,
+        packet: &[u8],
+        out: &mut Vec<u8>,
+        extra: &mut CodecExtra,
+    ) -> Result<(), PacketError> {
+        let [b0, b1, data @ ..] = packet else {
+            return Err(PacketError::ErrShortPacket);
+        };
+        if data.is_empty() {
+            return Err(PacketError::ErrShortPacket);
+        }
+        let header = H265NALUHeader::new(*b0, *b1);
+        if header.f() {
+            return Err(PacketError::ErrH265CorruptedPacket);
+        }
+        let mut is_keyframe = matches!(extra, CodecExtra::H265(e) if e.is_keyframe);
+        if !header.is_fragmentation_unit() {
+            self.reset_reassembly();
+        }
+
+        let limit = self.reassembly.limit();
+        if header.is_paci_packet() {
+            let [hi, lo, data @ ..] = data else {
+                return Err(PacketError::ErrShortPacket);
+            };
+            let paci = H265PACIPacket {
+                paci_header_fields: u16::from_be_bytes([*hi, *lo]),
+                ..Default::default()
+            };
+            let nalu = data
+                .get(usize::from(paci.phs_size())..)
+                .filter(|nalu| !nalu.is_empty())
+                .ok_or(PacketError::ErrShortPacket)?;
+            self.reassembly
+                .reserve(out, checked_add(ANNEXB_NALUSTART_CODE.len(), nalu.len(), limit)?)?;
+            self.remember_payload(packet, header)?;
+            out.extend_from_slice(ANNEXB_NALUSTART_CODE);
+            out.extend_from_slice(nalu);
+            // Preserve existing PACI behavior for short inner payloads.
+            if nalu.len() < H265NALU_HEADER_SIZE {
+                return Ok(());
+            }
+            is_keyframe |= H265NALUHeader::new(nalu[0], nalu[1]).is_irap();
+        } else if header.is_fragmentation_unit() {
+            let fu = H265FragmentationUnitHeader(data[0]);
+            if header.tid() == 0 || fu.fu_type() >= H265NALU_AGGREGATION_PACKET_TYPE {
+                return Err(PacketError::ErrH26xFragmentSequence);
+            }
+            let skip = if fu.s() && self.might_need_donl { 3 } else { 1 };
+            let payload = data
+                .get(skip..)
+                .filter(|payload| !payload.is_empty())
+                .ok_or(PacketError::ErrShortPacket)?;
+
+            const TYPE_MASK: u16 = 0b0111111 << 9;
+            let orig = (u16::from_be_bytes([*b0, *b1]) & !TYPE_MASK)
+                | (u16::from(fu.fu_type()) << 9);
+            let complete = self
+                .reassembly
+                .fragment((fu.s(), fu.e()), orig.to_be_bytes(), payload, out, false)?;
+            self.remember_payload(packet, header)?;
+            if !complete {
+                return Ok(());
+            }
+            is_keyframe |= H265NALUHeader(orig).is_irap();
+        } else if header.is_aggregation_packet() {
+            let donl = if self.might_need_donl { 1 } else { 0 };
+            let mut units = Aggregation::new(data, 2 * donl, donl);
+            let size = aggregation_size(units.clone(), 2, limit, |nalu| {
+                if nalu.is_empty() {
+                    return Err(PacketError::ErrShortPacket);
+                }
+                Ok(())
+            })?;
+            self.reassembly.reserve(out, size)?;
+            self.remember_payload(packet, header)?;
+            let mut full_header = false;
+            while let Some(nalu) = units.next_nalu()? {
+                if let [hi, lo, ..] = nalu {
+                    full_header = true;
+                    is_keyframe |= H265NALUHeader::new(*hi, *lo).is_irap();
+                }
+                out.extend_from_slice(ANNEXB_NALUSTART_CODE);
+                out.extend_from_slice(nalu);
+            }
+            if !full_header {
+                // The old AP path only set codec metadata for a full NAL header.
+                return Ok(());
+            }
+        } else {
+            let payload = if self.might_need_donl {
+                data.get(2..)
+                    .filter(|payload| !payload.is_empty())
+                    .ok_or(PacketError::ErrShortPacket)?
+            } else {
+                data
+            };
+            let size = checked_add(
+                ANNEXB_NALUSTART_CODE.len() + H265NALU_HEADER_SIZE,
+                payload.len(),
+                limit,
+            )?;
+            self.reassembly.reserve(out, size)?;
+            self.remember_payload(packet, header)?;
+            out.extend_from_slice(ANNEXB_NALUSTART_CODE);
+            out.extend_from_slice(&[*b0, *b1]);
+            out.extend_from_slice(payload);
+            is_keyframe |= header.is_irap();
+        }
+
+        *extra = CodecExtra::H265(H265CodecExtra { is_keyframe });
+        Ok(())
     }
 }
 
 impl Depacketizer for H265Depacketizer {
     fn out_size_hint(&self, packets_size: usize) -> Option<usize> {
-        // Roughly account for Annex B start codes
-        let estimated_packets = (packets_size / 1200).saturating_add(1);
-        Some(packets_size.saturating_add(4usize.saturating_mul(estimated_packets)))
+        Some(self.reassembly.size_hint(packets_size))
     }
 
-    /// depacketize parses the passed byte slice and stores the result
-    /// in the H265Packet this method is called upon
     fn depacketize(
         &mut self,
         packet: &[u8],
         out: &mut Vec<u8>,
-        codec_extra: &mut CodecExtra,
+        extra: &mut CodecExtra,
     ) -> Result<(), PacketError> {
-        if packet.len() <= H265NALU_HEADER_SIZE {
-            return Err(PacketError::ErrShortPacket);
+        let result = self.depacketize_packet(packet, out, extra);
+        if result.is_err() {
+            self.reset_reassembly();
         }
-
-        let header = H265NALUHeader::new(packet[0], packet[1]);
-        if header.f() {
-            return Err(PacketError::ErrH265CorruptedPacket);
-        }
-
-        if header.is_paci_packet() {
-            let mut decoded = H265PACIPacket::default();
-            decoded.depacketize(packet)?;
-
-            // Emit PACI payload with Annex-B start code
-            out.extend_from_slice(ANNEXB_NALUSTART_CODE);
-            out.extend_from_slice(&decoded.payload());
-
-            // Check if this is a keyframe.
-            if decoded.payload().len() >= H265NALU_HEADER_SIZE {
-                let payload_hdr = H265NALUHeader::new(decoded.payload()[0], decoded.payload()[1]);
-                let is_keyframe = if let CodecExtra::H265(e) = codec_extra {
-                    payload_hdr.is_irap() | e.is_keyframe
-                } else {
-                    payload_hdr.is_irap()
-                };
-                *codec_extra = CodecExtra::H265(H265CodecExtra { is_keyframe });
-            }
-
-            self.payload = H265Payload::H265PACIPacket(decoded);
-        } else if header.is_fragmentation_unit() {
-            let mut decoded = H265FragmentationUnitPacket::default();
-            decoded.with_donl(self.might_need_donl);
-
-            decoded.depacketize(packet)?;
-
-            let fu_header = decoded.fu_header();
-
-            if fu_header.s() {
-                // Start of fragmented NAL unit.
-                // Reuse existing buffer to avoid allocation on every FU start.
-                match &mut self.fu_buffer {
-                    Some(buf) => buf.clear(),
-                    None => {
-                        // First FU ever - allocate with typical max NAL size.
-                        // 128KB covers most 4K frames.
-                        self.fu_buffer = Some(Vec::with_capacity(128 * 1024));
-                    }
-                }
-            }
-
-            if let Some(ref mut buf) = self.fu_buffer {
-                buf.extend_from_slice(&decoded.payload());
-            }
-
-            if fu_header.e() {
-                // End of fragmented NAL unit - reconstruct original NAL.
-                // Borrow buffer instead of take() to preserve allocation for reuse.
-                if let Some(ref fu_payload) = self.fu_buffer {
-                    // Rebuild original NAL unit header from FU header.
-                    const TYPE_MASK: u16 = 0b0111111 << 9; // bits 14..9
-                    let payload_hdr_u16 = u16::from_be_bytes([packet[0], packet[1]]);
-                    let orig_type = fu_header.fu_type();
-                    let orig_hdr_u16 = (payload_hdr_u16 & !TYPE_MASK) | ((orig_type as u16) << 9);
-                    let orig_hdr = orig_hdr_u16.to_be_bytes();
-                    let orig_hdr_obj = H265NALUHeader::new(orig_hdr[0], orig_hdr[1]);
-
-                    // Check if this is a keyframe.
-                    let is_keyframe = if let CodecExtra::H265(e) = codec_extra {
-                        orig_hdr_obj.is_irap() | e.is_keyframe
-                    } else {
-                        orig_hdr_obj.is_irap()
-                    };
-                    *codec_extra = CodecExtra::H265(H265CodecExtra { is_keyframe });
-
-                    // Emit Annex-B start code + original NAL header + payload.
-                    out.extend_from_slice(ANNEXB_NALUSTART_CODE);
-                    out.extend_from_slice(&orig_hdr);
-                    out.extend_from_slice(fu_payload);
-                }
-                // Note: We don't clear fu_buffer here - it will be cleared on next FU start.
-                // This preserves the allocation for reuse.
-            }
-
-            self.payload = H265Payload::H265FragmentationUnitPacket(decoded);
-        } else if header.is_aggregation_packet() {
-            // Optimized AP parsing: write directly to output like H264 does.
-            // Parse inline without intermediate Vec allocations.
-
-            let mut offset = H265NALU_HEADER_SIZE;
-            let mut is_first_unit = true;
-            let mut unit_count = 0;
-
-            // Parse and emit NAL units in one pass (zero-copy approach)
-            while offset < packet.len() {
-                // Skip DONL/DOND if present
-                if self.might_need_donl {
-                    if is_first_unit {
-                        // First unit has DONL (2 bytes)
-                        if offset + 2 > packet.len() {
-                            break;
-                        }
-                        offset += 2;
-                    } else {
-                        // Subsequent units have DOND (1 byte)
-                        if offset + 1 > packet.len() {
-                            break;
-                        }
-                        offset += 1;
-                    }
-                }
-
-                // Read NAL unit size (2 bytes)
-                if offset + 2 > packet.len() {
-                    break;
-                }
-                let nalu_size = ((packet[offset] as usize) << 8) | (packet[offset + 1] as usize);
-                offset += 2;
-
-                // Validate NAL unit fits in packet
-                if offset + nalu_size > packet.len() {
-                    break;
-                }
-
-                let nalu = &packet[offset..offset + nalu_size];
-                offset += nalu_size;
-                unit_count += 1;
-
-                // Check if keyframe
-                if nalu.len() >= H265NALU_HEADER_SIZE {
-                    let nalu_hdr = H265NALUHeader::new(nalu[0], nalu[1]);
-                    let is_keyframe = if let CodecExtra::H265(e) = codec_extra {
-                        nalu_hdr.is_irap() | e.is_keyframe
-                    } else {
-                        nalu_hdr.is_irap()
-                    };
-                    *codec_extra = CodecExtra::H265(H265CodecExtra { is_keyframe });
-                }
-
-                // Write to output (zero allocation)
-                out.extend_from_slice(ANNEXB_NALUSTART_CODE);
-                out.extend_from_slice(nalu);
-
-                is_first_unit = false;
-            }
-
-            // AP must have at least 2 units (RFC 7798)
-            if unit_count < 2 {
-                return Err(PacketError::ErrShortPacket);
-            }
-
-            // Still parse into struct for payload() API compatibility.
-            // This allocates but is needed for the public API.
-            let mut decoded = H265AggregationPacket::default();
-            decoded.with_donl(self.might_need_donl);
-            decoded.depacketize(packet)?; // Validate structure
-
-            self.payload = H265Payload::H265AggregationPacket(decoded);
-        } else {
-            // Single NAL unit packet.
-            let mut decoded = H265SingleNALUnitPacket::default();
-            decoded.with_donl(self.might_need_donl);
-
-            decoded.depacketize(packet)?;
-
-            // Check if this is a keyframe.
-            let is_keyframe = if let CodecExtra::H265(e) = codec_extra {
-                header.is_irap() | e.is_keyframe
-            } else {
-                header.is_irap()
-            };
-            *codec_extra = CodecExtra::H265(H265CodecExtra { is_keyframe });
-
-            // Emit Annex-B start code + NAL header + payload (without DONL).
-            out.extend_from_slice(ANNEXB_NALUSTART_CODE);
-            let hdr = decoded.payload_header();
-            out.extend_from_slice(&[(hdr.0 >> 8) as u8, (hdr.0 & 0xFF) as u8]);
-            out.extend_from_slice(&decoded.payload());
-
-            self.payload = H265Payload::H265SingleNALUnitPacket(decoded);
-        }
-
-        Ok(())
+        result
     }
 
     /// is_partition_head checks if this is the head of a packetized nalu stream.
@@ -3092,12 +3082,10 @@ mod test {
                     )),
                     ..Default::default()
                 },
-                // FU with S=1 and E=1 (illegal but must still be routed as FU)
+                // FU with S=1 and E=1 cannot form a fragment sequence.
                 TestType {
                     raw: &[0x62, 0x01, 0xD3, 0xaa, 0xbb],
-                    expected_packet_type: Some(H265Payload::H265FragmentationUnitPacket(
-                        H265FragmentationUnitPacket::default(),
-                    )),
+                    expected_err: Some(PacketError::ErrH26xFragmentSequence),
                     ..Default::default()
                 },
                 TestType {
@@ -3126,15 +3114,11 @@ mod test {
                 let mut extra = CodecExtra::None;
                 let result = pck.depacketize(&cur.raw, &mut out, &mut extra);
 
-                if cur.expected_err.is_some() && result.is_ok() {
-                    assert!(false, "should error");
-                } else if cur.expected_err.is_none() && result.is_err() {
-                    assert!(false, "should not error");
-                }
-
-                if cur.expected_err.is_some() {
+                if let Some(error) = cur.expected_err {
+                    assert_eq!(result, Err(error));
                     continue;
                 }
+                result?;
 
                 if let Some(expected_packet_type) = &cur.expected_packet_type {
                     //TODO: assert_eq!(pck.packet(), expected_packet_type, "invalid packet type");
@@ -4301,14 +4285,12 @@ mod test {
             assert_eq!(&out[0..4], ANNEXB_NALUSTART_CODE);
             assert_eq!(&out[4..], &nalu[..]);
 
-            // Verify DONL was parsed from first FU
-            let payload = depacketizer.payload();
-            if let H265Payload::H265FragmentationUnitPacket(pkt) = payload {
-                // Last FU packet won't have DONL, that's expected
-                // The DONL from the first packet was used internally
-            } else {
+            // The last FU has no DONL and retains its own payload.
+            let H265Payload::H265FragmentationUnitPacket(pkt) = depacketizer.payload() else {
                 panic!("Expected H265FragmentationUnitPacket");
-            }
+            };
+            assert_eq!(pkt.donl(), None);
+            assert_eq!(pkt.payload(), &last_packet[3..]);
 
             Ok(())
         }
@@ -5039,11 +5021,37 @@ mod test {
         b"\x62\x01\x41\xb0\x75\x5c\x27\x46\xef\x8a\xe7\x1d\x50\x38\xb2\x13\x33\xe0\x79\x35\x1b\xc2\xb5\x79\x73\xe7\xc2\x6f\xb9\x1a\x8c\x21\x0e\xa9\x54\x17\x6c\x41\xab\xc8\x16\x57\xec\x5e\xeb\x89\x3b\xa9\x90\x8c\xff\x4d\x46\x8b\xf0\xd9\xc0\xd0\x51\xcf\x8b\x88\xf1\x5f\x1e\x9e\xc1\xb9\x1f\xe3\x06\x45\x35\x8a\x47\xe8\x9a\xf2\x4f\x19\x4c\xf8\xce\x68\x1b\x63\x34\x11\x75\xea\xe5\xb1\x0f\x38\xcc\x05\x09\x8b\x3e\x2b\x88\x84\x9d\xc5\x03\xc3\xc0\x90\x32\xe2\x45\x69\xb1\xe5\xf7\x68\x6b\x16\x90\xa0\x40\xe6\x18\x74\xd8\x68\xf3\x34\x38\x99\xf2\x6c\xb7\x1a\x35\x21\xca\x52\x56\x4c\x7f\xb2\xa3\xd5\xb8\x40\x50\x48\x3e\xdc\xdf\x0b\xf5\x54\x5a\x15\x1a\xe2\xc3\xb4\x94\xda\x3f\xb5\x34\xa2\xca\xbc\x2f\xe0\xa4\xe5\x69\xf4\xbf\x62\x4d\x15\x21\x1b\x11\xfc\x39\xaa\x86\x74\x96\x63\xfd\x07\x53\x26\xf6\x34\x72\xeb\x14\x37\x98\x0d\xf4\x68\x91\x2c\x6b\x46\x83\x88\x82\x04\x8b\x9f\xb8\x32\x73\x75\x8b\xf9\xac\x71\x42\xd1\x2d\xb4\x28\x28\xf5\x78\xe0\x32\xf3\xe1\xfc\x43\x6b\xf9\x92\xf7\x48\xfe\x7f\xc0\x17\xbd\xfd\xba\x2f\x58\x6f\xee\x84\x03\x18\xce\xb0\x9d\x8d\xeb\x22\xf1\xfc\xb1\xcf\xff\x2f\xb2\x9f\x6c\xe5\xb4\x69\xdc\xdd\x20\x93\x00\x30\xad\x56\x04\x66\x7e\xa3\x3c\x18\x4b\x43\x66\x00\x27\x1e\x1c\x09\x11\xd8\xf4\x8a\x9e\xc5\x6a\x94\xe5\xae\x0b\x8a\xbe\x84\xda\xe5\x44\x7f\x38\x1c\xe7\xbb\x03\x19\x66\xe1\x5d\x1d\xc1\xbd\x3d\xc6\xb7\xe3\xff\x7f\x8e\xff\x1e\xf6\x9e\x6f\x58\x27\x74\x65\xef\x02\x5d\xa4\xde\x27\x7f\x51\xe3\x4b\x9e\x3f\x79\x83\xbd\x1b\x8f\x0d\x77\xfb\xbc\xc5\x9f\x15\xa7\x4e\x05\x8a\x24\x97\x66\xb2\x7c\xf6\xe1\x84\x54\xdb\x39\x5e\xf6\x1b\x8f\x05\x73\x1d\xb6\x8e\xd7\x09\x9a\xc5\x92\x80".to_vec(),
     ];
 
-            for cur in tests {
-                let mut pck = H265Depacketizer::default();
+            let mut pck = H265Depacketizer::default();
+            for (i, packet) in tests.iter().enumerate() {
                 let mut out = Vec::new();
                 let mut extra = CodecExtra::None;
-                let _ = pck.depacketize(&cur, &mut out, &mut extra)?;
+                let result = pck.depacketize(packet, &mut out, &mut extra);
+                match i {
+                    4 => {
+                        result?;
+                        assert!(out.is_empty());
+                        assert_eq!(extra, CodecExtra::None);
+                    }
+                    5 => {
+                        result?;
+                        assert_eq!(
+                            out,
+                            [ANNEXB_NALUSTART_CODE, &[0x26, 1], &tests[4][3..], &packet[3..]]
+                                .concat()
+                        );
+                        assert!(matches!(extra, CodecExtra::H265(e) if e.is_keyframe));
+                    }
+                    7 => {
+                        // The capture ends with a tail whose FU start was not captured.
+                        assert_eq!(result, Err(PacketError::ErrH26xFragmentSequence));
+                        assert!(out.is_empty());
+                        assert_eq!(extra, CodecExtra::None);
+                    }
+                    _ => {
+                        result?;
+                        assert_eq!(out, [ANNEXB_NALUSTART_CODE, packet.as_slice()].concat());
+                    }
+                }
             }
 
             Ok(())

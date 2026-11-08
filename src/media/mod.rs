@@ -392,6 +392,7 @@ impl Media {
         packet: RtpPacket,
         reordering_size_audio: usize,
         reordering_size_video: usize,
+        h26x_reassembly_limit: usize,
         params: &[PayloadParams],
     ) {
         if !self.dir.is_receiving() {
@@ -422,6 +423,7 @@ impl Media {
             };
 
             let mut depack: CodecDepacketizer = codec.into();
+            depack.set_h26x_reassembly_limit(h26x_reassembly_limit);
 
             if let CodecDepacketizer::Tele(ref mut tele) = depack {
                 tele.clock_rate = params.spec.rtp_clock_rate();

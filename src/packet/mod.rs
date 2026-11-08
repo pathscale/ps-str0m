@@ -39,6 +39,9 @@ use h266::H266Depacketizer;
 pub use h266::H266Packetizer;
 pub use h266::detect_h266_keyframe;
 
+mod h26x;
+pub(crate) use h26x::DEFAULT_REASSEMBLY_LIMIT;
+
 mod h266_profile;
 pub use h266_profile::{H266Level, H266Profile, H266ProfileTierLevel, H266Tier};
 
@@ -392,7 +395,7 @@ impl From<Codec> for CodecDepacketizer {
             Codec::G722 => CodecDepacketizer::G711(G711Depacketizer),
             Codec::CN => CodecDepacketizer::ComfortNoise(ComfortNoiseDepacketizer),
             Codec::H264 => CodecDepacketizer::H264(H264Depacketizer::default()),
-            Codec::H265 => CodecDepacketizer::H265(H265Depacketizer::default()),
+            Codec::H265 => CodecDepacketizer::H265(H265Depacketizer::for_buffer()),
             Codec::H266 => CodecDepacketizer::H266(H266Depacketizer::default()),
             Codec::Vp8 => CodecDepacketizer::Vp8(Vp8Depacketizer::default()),
             Codec::Vp9 => CodecDepacketizer::Vp9(Vp9Depacketizer::default()),
@@ -479,6 +482,44 @@ impl Packetizer for CodecPacketizer {
             Av1(v) => v.nackable(),
             Null(v) => v.nackable(),
             Boxed(v) => v.nackable(),
+        }
+    }
+}
+
+impl CodecDepacketizer {
+    pub(crate) fn set_h26x_reassembly_limit(&mut self, limit: usize) {
+        match self {
+            Self::H264(d) => d.set_reassembly_limit(limit),
+            Self::H265(d) => d.set_reassembly_limit(limit),
+            Self::H266(d) => d.set_reassembly_limit(limit),
+            _ => {}
+        }
+    }
+
+    fn h26x_reassembly_limit(&self) -> Option<usize> {
+        match self {
+            Self::H264(d) => Some(d.reassembly_limit()),
+            Self::H265(d) => Some(d.reassembly_limit()),
+            Self::H266(d) => Some(d.reassembly_limit()),
+            _ => None,
+        }
+    }
+
+    fn reset_h26x_reassembly(&mut self) {
+        match self {
+            Self::H264(d) => d.reset_reassembly(),
+            Self::H265(d) => d.reset_reassembly(),
+            Self::H266(d) => d.reset_reassembly(),
+            _ => {}
+        }
+    }
+
+    fn finish_h26x_reassembly(&mut self) -> Result<(), PacketError> {
+        match self {
+            Self::H264(d) => d.finish_reassembly(),
+            Self::H265(d) => d.finish_reassembly(),
+            Self::H266(d) => d.finish_reassembly(),
+            _ => Ok(()),
         }
     }
 }

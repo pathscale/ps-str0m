@@ -48,6 +48,7 @@ pub struct RtcConfig {
     pub(crate) bwe_config: Option<BweConfig>,
     pub(crate) reordering_size_audio: usize,
     pub(crate) reordering_size_video: usize,
+    pub(crate) h26x_reassembly_limit: usize,
     pub(crate) reordering_timeout_audio: Option<Duration>,
     pub(crate) reordering_timeout_video: Option<Duration>,
     pub(crate) pause_threshold: Duration,
@@ -541,6 +542,29 @@ impl RtcConfig {
         self.reordering_timeout_audio
     }
 
+    /// Set the byte limit for receive-side H264, H265, and H266 frame assembly.
+    ///
+    /// Each H26x segment must fit this limit both as queued RTP payload bytes
+    /// and as reconstructed bytes. Reconstructed bytes include NAL headers,
+    /// four-byte framing and any in-progress fragmented NAL. A segment
+    /// over the limit is discarded and reported as
+    /// [`RtcError::Packet`](crate::RtcError::Packet). Zero rejects all nonempty
+    /// H26x segments. The setting is independent of the RTP reordering window
+    /// and has no effect in RTP mode.
+    ///
+    /// The default is 8 MiB, allowing headroom over 4,096 typical 1,200-byte
+    /// RTP payloads (about 4.7 MiB). Increase it for streams with larger access
+    /// units, or decrease it to match an application's receive budget.
+    pub fn set_h26x_reassembly_limit(mut self, limit: usize) -> Self {
+        self.h26x_reassembly_limit = limit;
+        self
+    }
+
+    /// Return the configured H264, H265, and H266 frame assembly byte limit.
+    pub fn h26x_reassembly_limit(&self) -> usize {
+        self.h26x_reassembly_limit
+    }
+
     /// Sets the number of packets held back for reordering video packets.
     ///
     /// Str0m tries to deliver the frames in order. This number determines how many
@@ -894,6 +918,7 @@ impl Default for RtcConfig {
             bwe_config: None,
             reordering_size_audio: 15,
             reordering_size_video: 30,
+            h26x_reassembly_limit: crate::packet::DEFAULT_REASSEMBLY_LIMIT,
             reordering_timeout_audio: Some(Duration::from_secs(1)),
             reordering_timeout_video: Some(Duration::from_secs(2)),
             pause_threshold: Duration::from_millis(1500),

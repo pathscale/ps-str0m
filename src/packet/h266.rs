@@ -16,6 +16,7 @@
 //! §7.2) is supported for send and receive via `with_donl`, wired from SDP
 //! negotiation.
 
+use super::h26x::{Aggregation, Reassembly, aggregation_size, checked_add};
 use super::{CodecExtra, Depacketizer, PacketError, Packetizer};
 use tracing::warn;
 
@@ -558,8 +559,7 @@ impl Packetizer for H266Packetizer {
 /// Emits Annex-B (start-code prefixed) NAL units.
 #[derive(Debug, Default)]
 pub struct H266Depacketizer {
-    /// Reassembly buffer for fragmentation units.
-    fu_buffer: Option<Vec<u8>>,
+    reassembly: Reassembly<2>,
     /// Whether DONL fields are present (sprop-max-don-diff > 0).
     might_need_donl: bool,
 }
@@ -567,166 +567,142 @@ pub struct H266Depacketizer {
 impl H266Depacketizer {
     /// Enable/disable DONL field parsing (RFC 9328 §4.3, sprop-max-don-diff > 0).
     pub fn with_donl(&mut self, value: bool) {
+        self.reset_reassembly();
         self.might_need_donl = value;
+    }
+
+    /// Set the maximum Annex-B bytes in an access unit, including any pending
+    /// NAL header and its four-byte prefix. The default is 8 MiB.
+    /// Pass the same output vector for all packets in the access unit.
+    /// Output already in that vector counts toward the limit.
+    /// Changing the limit discards any unfinished fragmented NAL.
+    pub fn set_reassembly_limit(&mut self, limit: usize) {
+        self.reassembly.set_limit(limit);
+    }
+
+    /// Discard any unfinished fragmented NAL. Call this on RTP discontinuity
+    /// or when abandoning an access unit; this API has no RTP sequence or time.
+    pub fn reset_reassembly(&mut self) {
+        self.reassembly.reset();
+    }
+
+    pub(super) fn reassembly_limit(&self) -> usize {
+        self.reassembly.limit()
+    }
+
+    /// Finish an access unit and discard any unfinished NAL, returning an
+    /// error if a fragment sequence did not end.
+    pub fn finish_reassembly(&mut self) -> Result<(), PacketError> {
+        self.reassembly.finish()
+    }
+
+    fn depacketize_packet(
+        &mut self,
+        packet: &[u8],
+        out: &mut Vec<u8>,
+        extra: &mut CodecExtra,
+    ) -> Result<(), PacketError> {
+        let [b0, b1, data @ ..] = packet else {
+            return Err(PacketError::ErrShortPacket);
+        };
+        if data.is_empty() {
+            return Err(PacketError::ErrShortPacket);
+        }
+        let header = H266NALUHeader::new(*b0, *b1);
+        if header.f() {
+            return Err(PacketError::ErrH266CorruptedPacket);
+        }
+        if header.z() {
+            // Preserve the existing tolerance of the reserved Z bit.
+            warn!("H266-DEPKT NAL with reserved Z bit set (ignored)");
+        }
+        let mut is_keyframe = matches!(extra, CodecExtra::H266(e) if e.is_keyframe);
+        if !header.is_fragmentation_unit() {
+            self.reset_reassembly();
+        }
+
+        let limit = self.reassembly.limit();
+        if header.is_fragmentation_unit() {
+            let fu = H266FragmentationUnitHeader(data[0]);
+            let kind = fu.fu_type();
+            if header.tid() == 0
+                || matches!(
+                    kind,
+                    H266NALU_AGGREGATION_PACKET_TYPE | H266NALU_FRAGMENTATION_UNIT_TYPE
+                )
+            {
+                return Err(PacketError::ErrH26xFragmentSequence);
+            }
+            let skip = if fu.s() && self.might_need_donl { 3 } else { 1 };
+            let payload = data.get(skip..).ok_or(PacketError::ErrShortPacket)?;
+            let orig = [*b0, (kind << 3) | (*b1 & 0b111)];
+            if !self
+                .reassembly
+                .fragment((fu.s(), fu.e()), orig, payload, out, false)?
+            {
+                return Ok(());
+            }
+            is_keyframe |= H266NALUHeader::new(orig[0], orig[1]).is_irap();
+        } else if header.is_aggregation_packet() {
+            let first_skip = if self.might_need_donl { 2 } else { 0 };
+            let mut units = Aggregation::new(data, first_skip, 0);
+            let size = aggregation_size(units.clone(), 2, limit, |nalu| {
+                let [hi, lo, ..] = nalu else {
+                    return Err(PacketError::ErrShortPacket);
+                };
+                let inner = H266NALUHeader::new(*hi, *lo);
+                if inner.is_aggregation_packet() || inner.is_fragmentation_unit() {
+                    return Err(PacketError::ErrH266CorruptedPacket);
+                }
+                Ok(())
+            })?;
+            self.reassembly.reserve(out, size)?;
+            while let Some(nalu) = units.next_nalu()? {
+                is_keyframe |= H266NALUHeader::new(nalu[0], nalu[1]).is_irap();
+                out.extend_from_slice(ANNEXB_NALUSTART_CODE);
+                out.extend_from_slice(nalu);
+            }
+        } else {
+            let payload = if self.might_need_donl {
+                data.get(2..)
+                    .filter(|payload| !payload.is_empty())
+                    .ok_or(PacketError::ErrShortPacket)?
+            } else {
+                data
+            };
+            let size = checked_add(
+                ANNEXB_NALUSTART_CODE.len() + H266NALU_HEADER_SIZE,
+                payload.len(),
+                limit,
+            )?;
+            self.reassembly.reserve(out, size)?;
+            out.extend_from_slice(ANNEXB_NALUSTART_CODE);
+            out.extend_from_slice(&[*b0, *b1]);
+            out.extend_from_slice(payload);
+            is_keyframe |= header.is_irap();
+        }
+
+        *extra = CodecExtra::H266(H266CodecExtra { is_keyframe });
+        Ok(())
     }
 }
 
 impl Depacketizer for H266Depacketizer {
     fn out_size_hint(&self, packets_size: usize) -> Option<usize> {
-        let estimated_packets = (packets_size / 1200).saturating_add(1);
-        Some(packets_size.saturating_add(4usize.saturating_mul(estimated_packets)))
+        Some(self.reassembly.size_hint(packets_size))
     }
 
     fn depacketize(
         &mut self,
         packet: &[u8],
         out: &mut Vec<u8>,
-        codec_extra: &mut CodecExtra,
+        extra: &mut CodecExtra,
     ) -> Result<(), PacketError> {
-        if packet.len() <= H266NALU_HEADER_SIZE {
-            return Err(PacketError::ErrShortPacket);
+        let result = self.depacketize_packet(packet, out, extra);
+        if result.is_err() {
+            self.reset_reassembly();
         }
-
-        let header = H266NALUHeader::new(packet[0], packet[1]);
-        if header.f() {
-            return Err(PacketError::ErrH266CorruptedPacket);
-        }
-        if header.z() {
-            // nuh_reserved_zero_bit: required to be 0 (RFC 9328 §1.1.4,
-            // reserved for future extensions). Tolerated and ignored here.
-            warn!("H266-DEPKT NAL with reserved Z bit set (ignored)");
-        }
-
-        let mark_keyframe = |codec_extra: &mut CodecExtra, irap: bool| {
-            let is_keyframe = if let CodecExtra::H266(e) = codec_extra {
-                irap | e.is_keyframe
-            } else {
-                irap
-            };
-            *codec_extra = CodecExtra::H266(H266CodecExtra { is_keyframe });
-        };
-
-        if header.is_fragmentation_unit() {
-            if packet.len() < H266NALU_HEADER_SIZE + 1 {
-                return Err(PacketError::ErrShortPacket);
-            }
-            let fu_header = H266FragmentationUnitHeader(packet[2]);
-
-            // The first FU of a series carries the DONL field when enabled
-            // (RFC 9328 §4.3.3) — skip it.
-            let payload_start = if fu_header.s() && self.might_need_donl {
-                if packet.len() < H266NALU_HEADER_SIZE + 1 + 2 {
-                    return Err(PacketError::ErrShortPacket);
-                }
-                H266NALU_HEADER_SIZE + 1 + 2
-            } else {
-                H266NALU_HEADER_SIZE + 1
-            };
-            let fu_payload = &packet[payload_start..];
-
-            if fu_header.s() {
-                match &mut self.fu_buffer {
-                    Some(buf) => buf.clear(),
-                    None => self.fu_buffer = Some(Vec::with_capacity(128 * 1024)),
-                }
-            }
-
-            if let Some(ref mut buf) = self.fu_buffer {
-                buf.extend_from_slice(fu_payload);
-            }
-
-            if fu_header.e() {
-                if let Some(ref buf) = self.fu_buffer {
-                    // Rebuild the original NAL header: byte0 unchanged,
-                    // byte1 = orig type in bits 7..3 + original TID.
-                    let orig_type = fu_header.fu_type();
-                    let orig_b0 = packet[0];
-                    let orig_b1 = (orig_type << 3) | (packet[1] & 0b111);
-                    let irap = matches!(
-                        orig_type,
-                        H266NALU_IDR_W_RADL | H266NALU_IDR_N_LP | H266NALU_CRA
-                    );
-                    mark_keyframe(codec_extra, irap);
-
-                    out.extend_from_slice(ANNEXB_NALUSTART_CODE);
-                    out.push(orig_b0);
-                    out.push(orig_b1);
-                    out.extend_from_slice(buf);
-                }
-            }
-            Ok(())
-        } else if header.is_aggregation_packet() {
-            let mut offset = H266NALU_HEADER_SIZE;
-            let mut unit_count = 0;
-
-            // DONL precedes the first aggregation unit when enabled
-            // (RFC 9328 §4.3.2).
-            if self.might_need_donl {
-                if packet.len() < offset + 2 {
-                    return Err(PacketError::ErrShortPacket);
-                }
-                offset += 2;
-            }
-
-            // Remember where this AP's output started so a malformed
-            // packet doesn't leave partial NAL units in `out`.
-            let out_start = out.len();
-
-            while offset < packet.len() {
-                if offset + 2 > packet.len() {
-                    out.truncate(out_start);
-                    return Err(PacketError::ErrShortPacket);
-                }
-                let nalu_size = ((packet[offset] as usize) << 8) | (packet[offset + 1] as usize);
-                offset += 2;
-                if offset + nalu_size > packet.len() || nalu_size < H266NALU_HEADER_SIZE {
-                    // Length field inconsistent with the remaining bytes.
-                    out.truncate(out_start);
-                    return Err(PacketError::ErrShortPacket);
-                }
-                let nalu = &packet[offset..offset + nalu_size];
-                offset += nalu_size;
-                unit_count += 1;
-
-                let inner = H266NALUHeader::new(nalu[0], nalu[1]);
-
-                // NAL types 28 (AP) and 29 (FU) are RTP-only constructs and
-                // must never appear inside an aggregation packet
-                // (RFC 9328 §4.3.2).
-                if inner.is_aggregation_packet() || inner.is_fragmentation_unit() {
-                    out.truncate(out_start);
-                    return Err(PacketError::ErrH266CorruptedPacket);
-                }
-
-                mark_keyframe(codec_extra, inner.is_irap());
-
-                out.extend_from_slice(ANNEXB_NALUSTART_CODE);
-                out.extend_from_slice(nalu);
-            }
-
-            if unit_count < 2 {
-                return Err(PacketError::ErrShortPacket);
-            }
-
-            Ok(())
-        } else {
-            // Single NAL unit packet.
-            mark_keyframe(codec_extra, header.is_irap());
-
-            out.extend_from_slice(ANNEXB_NALUSTART_CODE);
-            if self.might_need_donl {
-                // DONL (2 bytes) sits between the NAL header and the payload
-                // (RFC 9328 §4.3.1) — strip it.
-                if packet.len() < H266NALU_HEADER_SIZE + 2 + 1 {
-                    return Err(PacketError::ErrShortPacket);
-                }
-                out.extend_from_slice(&packet[..H266NALU_HEADER_SIZE]);
-                out.extend_from_slice(&packet[H266NALU_HEADER_SIZE + 2..]);
-            } else {
-                out.extend_from_slice(packet);
-            }
-            Ok(())
-        }
+        result
     }
 
     fn is_partition_head(&self, payload: &[u8]) -> bool {
@@ -1193,14 +1169,16 @@ mod test {
             let err = depack.depacketize(&fu_hdr_bytes, &mut out, &mut extra);
             assert_eq!(err, Err(PacketError::ErrShortPacket));
 
-            // Orphan middle/end fragment on a fresh depacketizer: silently
-            // consumed, no output.
+            // An orphan cannot emit output or complete a different NAL.
             let mut orphan = hdr(H266NALU_FRAGMENTATION_UNIT_TYPE, 0, 1).to_vec();
             orphan.push(H266FragmentationUnitHeader::new(false, true, false, 0).0);
             orphan.extend_from_slice(&[0xAA, 0xBB]);
             let mut depack = H266Depacketizer::default();
             let mut out = Vec::new();
-            depack.depacketize(&orphan, &mut out, &mut extra)?;
+            assert_eq!(
+                depack.depacketize(&orphan, &mut out, &mut extra),
+                Err(PacketError::ErrH26xFragmentSequence)
+            );
             assert!(out.is_empty(), "orphan FU must not produce output");
 
             Ok(())

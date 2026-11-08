@@ -120,11 +120,23 @@ struct Entry {
     offset: usize,
     head: bool,
     tail: bool,
+    admission: Admission,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Admission {
+    Accepted,
+    RejectedPacket,
+    RejectedSegment,
 }
 
 impl Entry {
     fn remaining(&self) -> &[u8] {
         &self.data[self.offset..]
+    }
+
+    fn is_padding(&self) -> bool {
+        self.data.is_empty() && !self.head && !self.tail && self.admission == Admission::Accepted
     }
 }
 
@@ -165,6 +177,7 @@ pub struct DepacketizingBuffer {
     last_processed: Option<LastProcessed>,
     max_time: Option<MediaTime>,
     depack_cache: Option<(Range<usize>, Depacketized)>,
+    pending_h26x_overflow: Option<usize>,
     contiguity: Contiguity,
 }
 
@@ -197,6 +210,7 @@ impl DepacketizingBuffer {
             last_processed: None,
             max_time: None,
             depack_cache: None,
+            pending_h26x_overflow: None,
             contiguity,
         }
     }
@@ -263,6 +277,7 @@ impl DepacketizingBuffer {
                     offset: 0,
                     head,
                     tail,
+                    admission: Admission::Accepted,
                 };
                 self.queue.insert(i, entry);
                 self.segments_dirty = true;
@@ -274,7 +289,67 @@ impl DepacketizingBuffer {
                         self.depack_cache = None;
                     }
                 }
+
+                if let Some(limit) = self.depack.h26x_reassembly_limit() {
+                    self.admit_h26x_payload(i, limit);
+                }
             }
+        }
+    }
+
+    fn admit_h26x_payload(&mut self, index: usize, limit: usize) {
+        let queue = &self.queue;
+        // Match segment boundaries even when an insertion fills a gap between
+        // two runs. A marker (or the codec's FU end) can split one timestamp.
+        let same_run = |left: &Entry, right: &Entry| {
+            !left.tail
+                && left.meta.time == right.meta.time
+                && left.meta.seq_no.is_next(right.meta.seq_no)
+        };
+        let mut first = index;
+        while first > 0 && same_run(&queue[first - 1], &queue[first]) {
+            first -= 1;
+        }
+        let head = (first..=index)
+            .find(|&i| queue[i].head || queue[i].admission == Admission::RejectedSegment);
+        let (range, rejected) = if let Some(head) = head {
+            let mut end = index;
+            while end + 1 < queue.len() && same_run(&queue[end], &queue[end + 1]) {
+                end += 1;
+            }
+            (head..=end, Admission::RejectedSegment)
+        } else {
+            // There is no known segment yet. Bound each orphan packet until a
+            // reordered head arrives and establishes the segment's extent.
+            (index..=index, Admission::RejectedPacket)
+        };
+
+        let already_rejected = queue
+            .range(range.clone())
+            .any(|entry| entry.admission != Admission::Accepted);
+        if !already_rejected
+            && queue
+                .range(range.clone())
+                .try_fold(0, |bytes, entry| {
+                    super::h26x::checked_add(bytes, entry.remaining().len(), limit)
+                })
+                .is_ok()
+        {
+            return;
+        }
+
+        // Keep boundary and sequence metadata so a rejected segment cannot
+        // later emit a suffix, including after queue eviction removes its head.
+        let empty = Arc::from([]);
+        for entry in self.queue.range_mut(range) {
+            if !entry.data.is_empty() {
+                entry.data = Arc::clone(&empty);
+            }
+            entry.admission = rejected;
+        }
+        self.depack_cache = None;
+        if !already_rejected {
+            self.pending_h26x_overflow = Some(limit);
         }
     }
 
@@ -283,6 +358,9 @@ impl DepacketizingBuffer {
         now: Instant,
         reordering_timeout: Option<Duration>,
     ) -> Option<Result<Depacketized, PacketError>> {
+        if let Some(limit) = self.pending_h26x_overflow.take() {
+            return Some(Err(PacketError::ErrH26xReassemblyLimit { limit }));
+        }
         loop {
             let queued = self.queue.len();
             let result = self.pop_frame(now, reordering_timeout);
@@ -293,11 +371,11 @@ impl DepacketizingBuffer {
         }
     }
 
-    fn pop_frame(
+    fn ready_segment(
         &mut self,
         now: Instant,
         reordering_timeout: Option<Duration>,
-    ) -> Option<Result<Depacketized, PacketError>> {
+    ) -> Option<(usize, usize, Instant)> {
         self.update_segments();
 
         if reordering_timeout.is_some() {
@@ -313,35 +391,45 @@ impl DepacketizingBuffer {
             }
         }
 
-        if self.segments.is_empty() {
+        let Some((start, stop, first_received)) = self.first_segment() else {
             self.discard_old_padding();
             return None;
-        }
+        };
 
-        // println!(
-        //     "{:?} {:?}",
-        //     self.queue.iter().map(|e| e.meta.seq_no).collect::<Vec<_>>(),
-        //     self.segments
-        // );
+        Some((start, stop, first_received))
+    }
 
-        let (start, stop, first_received) = self.first_segment().expect("segment exists");
+    fn pop_frame(
+        &mut self,
+        now: Instant,
+        reordering_timeout: Option<Duration>,
+    ) -> Option<Result<Depacketized, PacketError>> {
+        let (start, stop, first_received, seq) = loop {
+            let (start, stop, first_received) = self.ready_segment(now, reordering_timeout)?;
+            let seq = self.queue[stop].meta.seq_no;
+            if self.depack.h26x_reassembly_limit().is_none()
+                || self
+                    .queue
+                    .range(start..=stop)
+                    .all(|entry| entry.admission == Admission::Accepted)
+            {
+                break (start, stop, first_received, seq);
+            }
+            self.depack_cache = None;
+            self.last_processed = Some(LastProcessed::Advanced(seq));
+            self.consume_segment(stop);
+        };
 
         // A timestamp change can delimit a frame without a tail marker. Keep
-        // that fallback for count-only mode, but with a timeout the oldest
-        // frame must expire before any later frame is considered.
+        // that fallback for count-only mode. With a timeout, wait for the
+        // oldest frame unless admission already rejected it above.
         if reordering_timeout.is_some() && !self.queue[stop].tail {
             if self.timeout_allows_progress(now, first_received, reordering_timeout) {
-                let last = self.queue[stop].meta.seq_no;
                 self.consume_segment(stop);
-                self.last_processed = Some(LastProcessed::Expired(last));
+                self.last_processed = Some(LastProcessed::Expired(seq));
             }
             return None;
         }
-
-        let seq = {
-            let last = self.queue.get(stop).expect("entry for stop index");
-            last.meta.seq_no
-        };
 
         // depack ahead, even if we may not emit right away
         let mut dep = match self.depacketize(start, stop, seq) {
@@ -445,7 +533,7 @@ impl DepacketizingBuffer {
 
     fn discard_old_padding(&mut self) {
         let original_len = self.queue.len();
-        let is_padding = |entry: &Entry| entry.data.is_empty() && !entry.head && !entry.tail;
+        let is_padding = Entry::is_padding;
 
         if let Some(processed) = self.last_processed {
             let mut last = processed.seq_no();
@@ -516,16 +604,34 @@ impl DepacketizingBuffer {
             }
         }
 
-        let packets_size = self
-            .queue
-            .range(start..=stop)
-            .map(|p| p.remaining().len())
-            .sum();
-        let mut data = self
-            .depack
-            .out_size_hint(packets_size)
-            .map(Vec::with_capacity)
-            .unwrap_or_else(Vec::new);
+        self.depack.reset_h26x_reassembly();
+        let result = self.depacketize_uncached(start, stop);
+        if result.is_err() {
+            self.depack.reset_h26x_reassembly();
+        }
+        result
+    }
+
+    fn depacketize_uncached(
+        &mut self,
+        start: usize,
+        stop: usize,
+    ) -> Result<Depacketized, PacketError> {
+        let mut sizes = self.queue.range(start..=stop).map(|p| p.remaining().len());
+        let mut data = if let Some(limit) = self.depack.h26x_reassembly_limit() {
+            let packets_size =
+                sizes.try_fold(0, |sum, len| super::h26x::checked_add(sum, len, limit))?;
+            let mut out = Vec::new();
+            if let Some(hint) = self.depack.out_size_hint(packets_size) {
+                super::h26x::reserve_bounded(&mut out, hint, limit, limit)?;
+            }
+            out
+        } else {
+            self.depack
+                .out_size_hint(sizes.sum())
+                .map(Vec::with_capacity)
+                .unwrap_or_else(Vec::new)
+        };
         let mut codec_extra = CodecExtra::None;
 
         let time = self.queue.get(start).expect("first index exist").meta.time;
@@ -536,6 +642,7 @@ impl DepacketizingBuffer {
                 .depacketize(entry.remaining(), &mut data, &mut codec_extra)?;
             meta.push(entry.meta.clone());
         }
+        self.depack.finish_h26x_reassembly()?;
 
         Ok(Depacketized {
             time,
@@ -562,7 +669,7 @@ impl DepacketizingBuffer {
         let first_media = self
             .queue
             .iter()
-            .position(|entry| !entry.data.is_empty() || entry.head || entry.tail)?;
+            .position(|entry| !entry.is_padding())?;
         let next_complete = self
             .first_segment()
             .map(|(start, _, _)| start)
@@ -638,7 +745,7 @@ impl DepacketizingBuffer {
             }
 
             // Each segment can have multiple is_partition_head() == true, record the first.
-            if start.is_none() && entry.head {
+            if start.is_none() && (entry.head || entry.admission == Admission::RejectedSegment) {
                 start = Some(Start {
                     index,
                     time: entry.meta.time,
@@ -680,8 +787,7 @@ impl DepacketizingBuffer {
             // for next loop round.
             seq = entry.meta.seq_no;
 
-            let is_padding = entry.data.is_empty() && !entry.head && !entry.tail;
-            if !is_padding {
+            if !entry.is_padding() {
                 return false;
             }
         }
@@ -729,6 +835,164 @@ mod test {
             time: MediaTime::from_90khz(seq),
             last_sender_info: None,
             header: RtpHeader::default(),
+        }
+    }
+
+    #[test]
+    fn h26x_segment_boundaries_isolate_timestamp_gaps_and_errors() {
+        use crate::format::Codec;
+
+        type Fixture = (Codec, &'static [u8], &'static [u8], &'static [u8]);
+        let fixtures: [Fixture; 3] = [
+            (
+                Codec::H264,
+                &[0x7c, 0x85, 0x11],
+                &[0x7c, 0x45, 0x33],
+                &[0x61, 0xaa],
+            ),
+            (
+                Codec::H265,
+                &[0x62, 1, 0x93, 0x11],
+                &[0x62, 1, 0x53, 0x33],
+                &[2, 1, 0xaa],
+            ),
+            (
+                Codec::H266,
+                &[0, 0xe9, 0x87, 0x11],
+                &[0, 0xe9, 0x47, 0x33],
+                &[0, 1, 0xaa],
+            ),
+        ];
+        let now = Instant::now();
+        for (codec, start, end, single) in fixtures {
+            let mut buf = DepacketizingBuffer::new(codec.into(), 0);
+            let push = |buf: &mut DepacketizingBuffer, seq, time, marker, packet: &[u8]| {
+                let mut meta = bounded_queue_meta(seq);
+                meta.time = MediaTime::from_90khz(time);
+                meta.header.marker = marker;
+                buf.push(meta, packet);
+            };
+            let expected = [&[0, 0, 0, 1][..], single].concat();
+
+            // In count-only mode, a timestamp change can end a segment without
+            // a marker. A pending FU at that boundary must make it fail.
+            push(&mut buf, 1, 100, false, start);
+            push(&mut buf, 2, 200, true, single);
+            assert!(matches!(
+                buf.pop(now, None),
+                Some(Err(PacketError::ErrH26xFragmentSequence))
+            ));
+            assert_eq!(buf.pop(now, None).unwrap().unwrap().data, expected);
+
+            // A sequence gap makes the FU tail ineligible as a new segment.
+            push(&mut buf, 3, 300, false, start);
+            push(&mut buf, 5, 300, true, end);
+            push(&mut buf, 6, 300, true, single);
+            let frame = buf.pop(now, None).unwrap().unwrap();
+            assert_eq!(frame.data, expected);
+            assert_eq!(frame.seq_range(), SeqNo::from(6_u64)..=SeqNo::from(6_u64));
+            assert!(!frame.contiguous);
+
+            // An error inside an otherwise complete segment must not carry
+            // its pending bytes into the next segment.
+            push(&mut buf, 7, 400, false, start);
+            push(&mut buf, 8, 400, false, &start[..1]);
+            push(&mut buf, 9, 400, true, end);
+            assert!(matches!(
+                buf.pop(now, None),
+                Some(Err(PacketError::ErrShortPacket))
+            ));
+            push(&mut buf, 10, 500, true, single);
+            assert_eq!(buf.pop(now, None).unwrap().unwrap().data, expected);
+        }
+    }
+
+    #[test]
+    fn h26x_segment_checks_wire_bytes_independently_of_reconstructed_bytes() {
+        use crate::format::Codec;
+
+        let limit = 7;
+        let mut depack = CodecDepacketizer::from(Codec::H264);
+        depack.set_h26x_reassembly_limit(limit);
+        let mut buf = DepacketizingBuffer::new(depack, 0);
+        let now = Instant::now();
+        let packets = [&[0x7c, 0x85, 0xaa][..], &[0x7c, 5], &[0x7c, 0x45, 0xbb]];
+        for i in [0, 2, 1] {
+            let mut meta = bounded_queue_meta(i as u64 + 1);
+            meta.time = MediaTime::from_90khz(100);
+            meta.header.marker = i == 2;
+            buf.push(meta, packets[i]);
+        }
+        // The late middle packet bridges the gap. The reconstructed NAL
+        // would be seven bytes, but the complete RTP input totals eight.
+        assert!(buf.queue.iter().all(|entry| entry.remaining().is_empty()));
+        assert!(matches!(
+            buf.pop(now, None),
+            Some(Err(PacketError::ErrH26xReassemblyLimit { limit: 7 }))
+        ));
+        let mut meta = bounded_queue_meta(4);
+        meta.header.marker = true;
+        buf.push(meta, [0x61, 0x11, 0x22]);
+        assert_eq!(
+            buf.pop(now, None).unwrap().unwrap().data,
+            [0, 0, 0, 1, 0x61, 0x11, 0x22]
+        );
+    }
+
+    #[test]
+    fn h26x_unfinished_segment_releases_rejected_wire_bytes_at_admission() {
+        use crate::format::Codec;
+
+        let fixtures = [
+            (
+                Codec::H264,
+                [0x7c, 0x85, 0x11, 0x22],
+                [0x7c, 0x05, 0x33, 0x44],
+                [0x7c, 0x45, 0x55],
+                [0x61, 0x00, 0x66],
+            ),
+            (
+                Codec::H265,
+                [0x62, 1, 0x93, 0x11],
+                [0x62, 1, 0x13, 0x33],
+                [0x62, 1, 0x53],
+                [2, 1, 0x66],
+            ),
+            (
+                Codec::H266,
+                [0, 0xe9, 0x87, 0x11],
+                [0, 0xe9, 0x07, 0x33],
+                [0, 0xe9, 0x47],
+                [0, 1, 0x66],
+            ),
+        ];
+        let now = Instant::now();
+        for (codec, start, middle, end_header, single) in fixtures {
+            let mut depack = CodecDepacketizer::from(codec);
+            depack.set_h26x_reassembly_limit(7);
+            let mut buf = DepacketizingBuffer::new(depack, 0);
+            let push = |buf: &mut DepacketizingBuffer, seq, marker, packet: &[u8]| {
+                let mut meta = bounded_queue_meta(seq);
+                meta.time = MediaTime::from_90khz(100);
+                meta.header.marker = marker;
+                buf.push(meta, packet);
+            };
+            push(&mut buf, 1, false, &start);
+            assert_eq!(buf.queue[0].remaining(), &start);
+            push(&mut buf, 2, false, &middle);
+            assert!(buf.queue.iter().all(|entry| entry.remaining().is_empty()));
+            assert!(matches!(
+                buf.pop(now, None),
+                Some(Err(PacketError::ErrH26xReassemblyLimit { limit: 7 }))
+            ));
+
+            let end = [end_header.as_slice(), &[0x55]].concat();
+            push(&mut buf, 3, true, &end);
+            push(&mut buf, 4, true, &single);
+            let frame = buf.pop(now, None).unwrap().unwrap();
+            assert_eq!(frame.data, [&[0, 0, 0, 1][..], &single].concat());
+            assert_eq!(frame.seq_range(), SeqNo::from(4_u64)..=SeqNo::from(4_u64));
+            assert!(buf.pop(now, None).is_none());
         }
     }
 

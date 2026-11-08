@@ -71,6 +71,7 @@ pub(crate) struct Session {
 
     reordering_size_audio: usize,
     reordering_size_video: usize,
+    h26x_reassembly_limit: usize,
     reordering_timeout_audio: Option<Duration>,
     reordering_timeout_video: Option<Duration>,
     intervals: RtcpReportIntervals,
@@ -183,6 +184,7 @@ impl Session {
             app: None,
             reordering_size_audio: config.reordering_size_audio,
             reordering_size_video: config.reordering_size_video,
+            h26x_reassembly_limit: config.h26x_reassembly_limit,
             reordering_timeout_audio: config.reordering_timeout_audio,
             reordering_timeout_video: config.reordering_timeout_video,
             intervals: config.intervals,
@@ -837,6 +839,7 @@ impl Session {
                 packet,
                 self.reordering_size_audio,
                 self.reordering_size_video,
+                self.h26x_reassembly_limit,
                 &self.codec_config,
             );
         }
@@ -853,6 +856,7 @@ impl Session {
                 rec_packet,
                 self.reordering_size_audio,
                 self.reordering_size_video,
+                self.h26x_reassembly_limit,
                 &self.codec_config,
             );
         }
