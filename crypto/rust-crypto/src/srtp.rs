@@ -102,7 +102,11 @@ impl std::fmt::Debug for RustCryptoSupportedAeadChacha20Poly1305 {
 }
 
 impl SupportedAeadChacha20Poly1305 for RustCryptoSupportedAeadChacha20Poly1305 {
-    fn create_cipher(&self, mut key: [u8; 32], _encrypt: bool) -> Box<dyn AeadChacha20Poly1305Cipher> {
+    fn create_cipher(
+        &self,
+        mut key: [u8; 32],
+        _encrypt: bool,
+    ) -> Box<dyn AeadChacha20Poly1305Cipher> {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
         // Wipe the legacy by-value argument before allocating the cipher box.
         key.zeroize();
