@@ -897,9 +897,12 @@ impl IceAgent {
         };
         let limit = signaling_limit(self.max_remote_candidates);
         for candidate in candidates {
-            if let Err(e) =
-                Self::admit_remote_candidate(&mut slots, Some(credentials), limit, candidate.clone())
-            {
+            if let Err(e) = Self::admit_remote_candidate(
+                &mut slots,
+                Some(credentials),
+                limit,
+                candidate.clone(),
+            ) {
                 self.candidate_overflow.remote = self.candidate_overflow.remote.saturating_add(1);
                 return Err(e);
             }
